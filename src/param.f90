@@ -27,6 +27,9 @@ module mod_param
   character(len=8) :: vv_neumann = 'explicit' ! wall derivative in dv/dy = 0: 'explicit' (6-point one-sided)
                                             ! or 'compact' (row of D1: divergence exactly zero at the walls)
   character(len=16) :: nl_form = 'rotational' ! 'rotational' u x omega (5 FFTs) or 'advective' (8 FFTs)
+  character(len=8) :: bc_bot = 'noslip'     ! velocity at the bottom wall y = -1: 'noslip' (u = v = 0) or
+                                            ! 'freeslip' (v = 0, du/dy = 0); the top wall is always no-slip
+  logical  :: freeslip_bot = .false.        ! derived: bc_bot == 'freeslip'
   !
   ! &time
   !
@@ -96,7 +99,7 @@ contains
     integer, intent(in) :: myid
     integer :: iunit,ios
     namelist /grid/ nx,ny,lx,grid_type,grid_alpha,grid_file,fd_order,dealias
-    namelist /physics/ re,forcing,ubulk,dpdx,vv_neumann,nl_form
+    namelist /physics/ re,forcing,ubulk,dpdx,vv_neumann,nl_form,bc_bot
     namelist /time/ nstep,tmax,wall_time_max,dt,fixed_dt,dt_max,dt_growth,cfl,cfl_visc
     namelist /init/ init_type,init_amp,init_seed,mode_file,mode_kx,restart_file,reset_time
     namelist /output/ data_dir,iout_log,iout_stats,iout_save_stats,iout_restart,iout_field,tstats_start, &
@@ -134,6 +137,8 @@ contains
       call abort_run("sbc_bot and sbc_top must be 'D' or 'N'")
     if(all(forcing /= ['cfr','cpg'])) call abort_run('forcing must be cfr or cpg')
     if(all(nl_form /= ['advective ','rotational'])) call abort_run('nl_form must be advective or rotational')
+    if(all(bc_bot /= ['noslip  ','freeslip'])) call abort_run("bc_bot must be 'noslip' or 'freeslip'")
+    freeslip_bot = (bc_bot == 'freeslip')
     if(all(scal_form /= ['advective ','divergence','skew      '])) &
       call abort_run("scal_form must be 'advective', 'divergence' or 'skew'")
     nxh = nx/2
@@ -173,6 +178,7 @@ contains
       write(*,f1) 'Navier-Stokes solver','velocity-vorticity (phi = lap v), implicit viscous (SMR RK3)'
       write(*,f1) 'nonlinear term',trim(nl_form)
       write(*,f1) 'wall derivative in dv/dy = 0',trim(vv_neumann)
+      write(*,f1) 'bottom wall (y = -1)',merge('free-slip (v = 0, du/dy = 0)','no-slip                     ',freeslip_bot)
       if(fixed_dt) then
         write(*,fr) 'fixed time step dt',dt
       else

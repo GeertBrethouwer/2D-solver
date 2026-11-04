@@ -54,16 +54,24 @@ contains
     complex(rp), allocatable :: mode(:)
     u(:,:) = 0; v(:,:) = 0; s(:,:,:) = 0
     !
-    ! laminar profile in the mean mode
+    ! laminar profile in the mean mode: Poiseuille, or with a free-slip bottom wall the open-channel
+    ! profile U = Umax (1 - eta^2), eta = (y+1)/2 (dU/dy = 0 at y = -1, U = 0 at y = 1);
+    ! both have U_bulk = 2/3 Umax
     !
     if(forcing == 'cfr') then
       ulam = 1.5_rp*ubulk
+    else if(freeslip_bot) then
+      ulam = 2._rp*dpdx*re
     else
       ulam = 0.5_rp*dpdx*re
     end if
     if(kx_lo == 1) then
       do k=1,ny
-        u(1,k) = ulam*(1._rp-yg(k)**2)
+        if(freeslip_bot) then
+          u(1,k) = ulam*(1._rp-(0.5_rp*(yg(k)+1._rp))**2)
+        else
+          u(1,k) = ulam*(1._rp-yg(k)**2)
+        end if
       end do
     end if
     uref = (2._rp/3._rp)*abs(ulam)

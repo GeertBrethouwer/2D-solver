@@ -23,11 +23,12 @@
 !
 module mod_ysolve
   use mod_types
-  use mod_param , only: nxh,ny,lx,abort_run,vv_neumann
+  use mod_param , only: nxh,ny,lx,abort_run,vv_neumann,freeslip_bot
   use mod_decomp, only: nkx,kx_lo
   use mod_compact, only: nbw,ca1 => a1,cb1 => b1,ca2 => a2,cb2 => b2,ct1w => t1w,ct1d => t1d,ct1u => t1u, &
                          ct2w => t2w,ct2d => t2d,ct2u => t2u,cc1 => c1,ccn => cn,cnc1 => nc1,cncn => ncn, &
-                         cwq => wq,ckl2 => kl2,cku2 => ku2,cew1 => ew1,cewn => ewn, &
+                         cwq => wq,ckl2 => kl2,cku2 => ku2,cew1 => ew1,cewn => ewn,cew2 => ew2, &
+                         cc21 => c21,cnc21 => nc21, &
                          cb1m => b1m,ct1mw => t1mw,ct1md => t1md,ct1mu => t1mu,crxi => rxi
   implicit none
   private
@@ -46,13 +47,22 @@ module mod_ysolve
   logical :: mean_owner
   integer :: i00 = -1
   !
+  ! batched scalar solve: per-scalar theta, diffusivity, wall values and Neumann flags; work arrays
+  !
+  integer :: nsb
+  real(rp), allocatable :: sth(:),sdf(:),sgb(:),sgt(:)
+  logical , allocatable :: snb(:),snt(:)
+  complex(rp), allocatable :: sxb(:,:)
+  real(rp), allocatable :: ufb(:,:,:)
+  !
   ! velocity-vorticity method
   !
   complex(rp), allocatable, public :: phv(:,:)  ! phi = lap(v) (mean column: U)
   complex(rp), allocatable :: wa(:,:),wb(:,:)
   real(rp), allocatable :: hinv_c(:,:,:),ginv_v(:,:,:),hinv_v(:,:)
   real(rp) :: c_cached_vv(3) = -1._rp
-  real(rp), allocatable :: dw1(:),dwn(:)    ! wall-derivative functionals used for dv/dy = 0
+  real(rp), allocatable :: dw1(:),dwn(:)    ! wall functionals: dv/dy = 0 (no-slip) at both walls, or
+                                            ! d2v/dy2 = 0 at a free-slip bottom wall (dw1)
   integer :: ndw1,ndwn
 contains
   subroutine init_ysolve
@@ -83,6 +93,7 @@ contains
     allocate(uf(nkx,ny,0:nbw),psi(nkx,ny),sx(nkx,ny))
     uf = 0; psi = 0; sx = 0
     !$acc enter data copyin(uf,psi,sx)
+    call init_scalar_solve
   end subroutine init_ysolve
   !
   ! ---------------------------------------------------------------------------
@@ -269,6 +280,41 @@ contains
     call bsolve(n1,n,i,kl,ku,ca,cb,a2,b2,.true.,.true.,x,uf)
   end subroutine hsolve_ab
   !
+  subroutine hsolve_mean(n1,n,i,kl,ku,ca,cb,a2,b2,h,g,x,xh,gz,uf,c1,nc1,fsb)
+    !
+    ! mean-flow solve: L x = g at interior points, x(n) = 0 at the top wall; at the bottom wall
+    ! x(1) = 0 (no-slip) or D1 x(1) = 0 (free-slip, by superposition of the solution with x(1) = 1;
+    ! D1 at the wall = first row of the compact D1). xh and gz are work columns.
+    !
+    !$acc routine seq
+    implicit none
+    integer , intent(in) :: n1,n,i,kl,ku,nc1
+    real(rp), intent(in) :: ca,cb,a2(-1:1,n),b2(-nbw:nbw,n),h(4),c1(n)
+    complex(rp), intent(in) :: g(n1,n)
+    complex(rp), intent(inout) :: x(n1,n),xh(n1,n),gz(n1,n)
+    real(rp), intent(inout) :: uf(n1,n,0:nbw)
+    logical , intent(in) :: fsb
+    complex(rp) :: zero,one,s1,s2,al
+    integer :: r
+    zero = (0._rp,0._rp); one = (1._rp,0._rp)
+    call hsolve_ab(n1,n,i,kl,ku,ca,cb,a2,b2,h,g,x,uf,zero,zero)
+    if(fsb) then
+      do r=1,n
+        gz(i,r) = zero
+      end do
+      call hsolve_ab(n1,n,i,kl,ku,ca,cb,a2,b2,h,gz,xh,uf,one,zero)
+      s1 = zero; s2 = zero
+      do r=1,nc1
+        s1 = s1 + c1(r)*x(i,r)
+        s2 = s2 + c1(r)*xh(i,r)
+      end do
+      al = -s1/s2
+      do r=1,n
+        x(i,r) = x(i,r) + al*xh(i,r)
+      end do
+    end if
+  end subroutine hsolve_mean
+  !
   ! ---------------------------------------------------------------------------
   ! derivatives
   ! ---------------------------------------------------------------------------
@@ -323,151 +369,184 @@ contains
   ! scalars
   ! ---------------------------------------------------------------------------
   !
-  subroutine scalar_solve(s,c,bcb,bct,gb,gt)
+  subroutine init_scalar_solve
     !
-    ! theta-method for a scalar:  [ (1 + c kx^2) I - c D2 ] s = r  at interior points,
-    ! with Dirichlet ('D', s = g) or Neumann ('N', D1 s = g) conditions at the walls
-    ! (g only for the mean mode). On input s holds r. Premultiplying by A2 gives the
-    ! banded matrix H = (1+ck^2) A2 - c B2; the unknown wall values tau_1, tau_N of
-    ! L s enter rows 2 and N-1, and are determined together with the wall values of s
-    ! by a small influence-matrix system (as in HiCHAN).
+    ! per-scalar parameters of the batched scalar solve, constant during the run (on the device)
+    !
+    use mod_param, only: nscal,scal_theta,diff,sbc_bot,sbc_top,sval_bot,sval_top
+    implicit none
+    integer :: n
+    nsb = max(nscal,1)
+    allocate(sth(nsb),sdf(nsb),sgb(nsb),sgt(nsb),snb(nsb),snt(nsb))
+    sth = 0; sdf = 0; sgb = 0; sgt = 0; snb = .false.; snt = .false.
+    do n=1,nscal
+      sth(n) = scal_theta(n); sdf(n) = diff(n)
+      sgb(n) = sval_bot(n)  ; sgt(n) = sval_top(n)
+      snb(n) = (sbc_bot(n) == 'N'); snt(n) = (sbc_top(n) == 'N')
+    end do
+    ! work arrays: one column per (kx, scalar) pair, column index ic = i + nkx*(n-1)
+    allocate(sxb(nkx*nsb,ny),ufb(nkx*nsb,ny,0:nbw))
+    sxb = 0; ufb = 0
+    !$acc enter data copyin(sth,sdf,sgb,sgt,snb,snt,sxb,ufb)
+  end subroutine init_scalar_solve
+  !
+  subroutine scalar_solve(s,ns_,dtb)
+    !
+    ! theta-method for all scalars at once:  [ (1 + c kx^2) I - c D2 ] s_n = r_n  at interior points,
+    ! c = theta_n*dtb*kappa_n, with Dirichlet ('D', s = g) or Neumann ('N', D1 s = g) conditions at
+    ! the walls (g only for the mean mode). On input s holds r. Premultiplying by A2 gives the
+    ! banded matrix H = (1+ck^2) A2 - c B2; the unknown wall values tau_1, tau_N of L s enter rows
+    ! 2 and N-1, and are determined together with the wall values of s by a small influence-matrix
+    ! system (as in HiCHAN).
+    !
+    ! The column solves are sequential in y and latency bound on GPUs, with only nkx columns per
+    ! scalar. All scalars are therefore solved in ONE kernel over the (kx, scalar) pairs: nscal*nkx
+    ! threads, in about the time of a single scalar. Threads of one warp belong to the same scalar
+    ! (n is the outer loop), so the Dirichlet/Neumann branches do not diverge within a warp unless
+    ! nkx is not a multiple of 32.
     !
     implicit none
-    complex(rp), intent(inout) :: s(nkx,ny)
-    real(rp), intent(in) :: c,gb,gt
-    character(len=1), intent(in) :: bcb,bct
-    integer :: i,r,m,q,p,l,nh
-    real(rp) :: k2,ca,cb
+    integer , intent(in) :: ns_
+    complex(rp), intent(inout) :: s(nkx,ny,ns_)
+    real(rp), intent(in) :: dtb
+    integer :: i,n,ic,r,m,q,p,l,nh,ncol
+    real(rp) :: k2,c,ca,cb,gb,gt
     complex(rp) :: e(4,5),zz(4),f,t,ra1,ran,zero
     logical :: isnb,isnt,isd
     zero = (0._rp,0._rp)
-    isnb = (bcb == 'N'); isnt = (bct == 'N')
-    isd  = .not.(isnb.or.isnt)
-    nh = 3
-    if(.not.isd) nh = 5
-    !$acc parallel loop gang vector default(present) private(e,zz) async(1)
-    do i=1,nkx
-      k2 = kxv(i)**2
-      ca = 1._rp + c*k2
-      cb = -c
-      ra1 = a2(1,1)*s(i,2)
-      ran = a2(-1,ny)*s(i,ny-1)
-      !
-      ! m = 1: particular; 2: tau_1; 3: tau_N; 4: s(-1) = 1; 5: s(+1) = 1
-      !
-      do m=1,nh
-        if(m == 1) then
-          do r=2,ny-1
-            sx(i,r) = zero
-            do q=max(-1,2-r),min(1,ny-1-r)
-              sx(i,r) = sx(i,r) + a2(q,r)*s(i,r+q)
+    ncol = nkx*nsb
+    !$acc parallel loop gang vector collapse(2) default(present) private(e,zz) async(1)
+    do n=1,ns_
+      do i=1,nkx
+        ic = i + nkx*(n-1)
+        c  = sth(n)*dtb*sdf(n)
+        gb = sgb(n); gt = sgt(n)
+        isnb = snb(n); isnt = snt(n)
+        isd  = .not.(isnb.or.isnt)
+        nh = 3
+        if(.not.isd) nh = 5
+        k2 = kxv(i)**2
+        ca = 1._rp + c*k2
+        cb = -c
+        ra1 = a2(1,1)*s(i,2,n)
+        ran = a2(-1,ny)*s(i,ny-1,n)
+        !
+        ! m = 1: particular; 2: tau_1; 3: tau_N; 4: s(-1) = 1; 5: s(+1) = 1
+        !
+        do m=1,nh
+          if(m == 1) then
+            do r=2,ny-1
+              sxb(ic,r) = zero
+              do q=max(-1,2-r),min(1,ny-1-r)
+                sxb(ic,r) = sxb(ic,r) + a2(q,r)*s(i,r+q,n)
+              end do
             end do
-          end do
-          sx(i,1) = zero; sx(i,ny) = zero
-          if(ismean(i)) then
-            if(.not.isnb) sx(i,1)  = gb
-            if(.not.isnt) sx(i,ny) = gt
+            sxb(ic,1) = zero; sxb(ic,ny) = zero
+            if(ismean(i)) then
+              if(.not.isnb) sxb(ic,1)  = gb
+              if(.not.isnt) sxb(ic,ny) = gt
+            end if
+          else
+            do r=1,ny
+              sxb(ic,r) = zero
+            end do
+            if(m == 2) sxb(ic,2)    = a2(-1,2)
+            if(m == 3) sxb(ic,ny-1) = a2( 1,ny-1)
+            if(m == 4) sxb(ic,1)    = 1._rp
+            if(m == 5) sxb(ic,ny)   = 1._rp
           end if
-        else
-          do r=1,ny
-            sx(i,r) = zero
-          end do
-          if(m == 2) sx(i,2)    = a2(-1,2)
-          if(m == 3) sx(i,ny-1) = a2( 1,ny-1)
-          if(m == 4) sx(i,1)    = 1._rp
-          if(m == 5) sx(i,ny)   = 1._rp
-        end if
-        call bsolve(nkx,ny,i,klh,kuh,ca,cb,a2,b2,.true.,.true.,sx,uf)
-        ! conditions: rows 1 and N of H s = A2 g, and the boundary conditions
-        e(1,m) = bmul(nkx,ny,i,1 ,ca,cb,a2,b2,sx)
-        e(2,m) = bmul(nkx,ny,i,ny,ca,cb,a2,b2,sx)
-        if(m == 1) then
-          e(1,m) = e(1,m) - ra1
-          e(2,m) = e(2,m) - ran
-        end if
-        if(m == 2) e(1,m) = e(1,m) - a2(0,1)
-        if(m == 3) e(2,m) = e(2,m) - a2(0,ny)
-        if(isnb) then
-          f = zero
-          do r=1,nc1
-            f = f + c1(r)*sx(i,r)
-          end do
-          e(3,m) = f
-          if(m == 1 .and. ismean(i)) e(3,m) = e(3,m) - gb
-        else
-          e(3,m) = zero
-          if(m == 4) e(3,m) = (1._rp,0._rp)
-        end if
-        if(isnt) then
-          f = zero
-          do r=ny-ncn+1,ny
-            f = f + cn(r)*sx(i,r)
-          end do
-          e(4,m) = f
-          if(m == 1 .and. ismean(i)) e(4,m) = e(4,m) - gt
-        else
-          e(4,m) = zero
-          if(m == 5) e(4,m) = (1._rp,0._rp)
-        end if
-      end do
-      !
-      ! solve sum_m e(:,m+1) zz(m) = -e(:,1)  (Gaussian elimination, partial pivoting)
-      !
-      if(isd) then
-        ! Dirichlet: only tau_1 and tau_N are unknown (2x2)
-        f = e(1,2)*e(2,3) - e(1,3)*e(2,2)
-        zz(1) = (-e(1,1)*e(2,3) + e(1,3)*e(2,1))/f
-        zz(2) = (-e(2,1)*e(1,2) + e(2,2)*e(1,1))/f
-        zz(3) = zero; zz(4) = zero
-      else
-        do q=1,4
-          e(q,1) = -e(q,1)
-        end do
-        do q=1,4
-          p = q
-          do l=q+1,4
-            if(abs(e(l,q+1)) > abs(e(p,q+1))) p = l
-          end do
-          if(p /= q) then
-            do l=1,5
-              t = e(q,l); e(q,l) = e(p,l); e(p,l) = t
-            end do
+          call bsolve(ncol,ny,ic,klh,kuh,ca,cb,a2,b2,.true.,.true.,sxb,ufb)
+          ! conditions: rows 1 and N of H s = A2 g, and the boundary conditions
+          e(1,m) = bmul(ncol,ny,ic,1 ,ca,cb,a2,b2,sxb)
+          e(2,m) = bmul(ncol,ny,ic,ny,ca,cb,a2,b2,sxb)
+          if(m == 1) then
+            e(1,m) = e(1,m) - ra1
+            e(2,m) = e(2,m) - ran
           end if
-          do p=q+1,4
-            f = e(p,q+1)/e(q,q+1)
-            do l=1,5
-              e(p,l) = e(p,l) - f*e(q,l)
+          if(m == 2) e(1,m) = e(1,m) - a2(0,1)
+          if(m == 3) e(2,m) = e(2,m) - a2(0,ny)
+          if(isnb) then
+            f = zero
+            do r=1,nc1
+              f = f + c1(r)*sxb(ic,r)
+            end do
+            e(3,m) = f
+            if(m == 1 .and. ismean(i)) e(3,m) = e(3,m) - gb
+          else
+            e(3,m) = zero
+            if(m == 4) e(3,m) = (1._rp,0._rp)
+          end if
+          if(isnt) then
+            f = zero
+            do r=ny-ncn+1,ny
+              f = f + cn(r)*sxb(ic,r)
+            end do
+            e(4,m) = f
+            if(m == 1 .and. ismean(i)) e(4,m) = e(4,m) - gt
+          else
+            e(4,m) = zero
+            if(m == 5) e(4,m) = (1._rp,0._rp)
+          end if
+        end do
+        !
+        ! solve sum_m e(:,m+1) zz(m) = -e(:,1)  (Gaussian elimination, partial pivoting)
+        !
+        if(isd) then
+          ! Dirichlet: only tau_1 and tau_N are unknown (2x2)
+          f = e(1,2)*e(2,3) - e(1,3)*e(2,2)
+          zz(1) = (-e(1,1)*e(2,3) + e(1,3)*e(2,1))/f
+          zz(2) = (-e(2,1)*e(1,2) + e(2,2)*e(1,1))/f
+          zz(3) = zero; zz(4) = zero
+        else
+          do q=1,4
+            e(q,1) = -e(q,1)
+          end do
+          do q=1,4
+            p = q
+            do l=q+1,4
+              if(abs(e(l,q+1)) > abs(e(p,q+1))) p = l
+            end do
+            if(p /= q) then
+              do l=1,5
+                t = e(q,l); e(q,l) = e(p,l); e(p,l) = t
+              end do
+            end if
+            do p=q+1,4
+              f = e(p,q+1)/e(q,q+1)
+              do l=1,5
+                e(p,l) = e(p,l) - f*e(q,l)
+              end do
             end do
           end do
-        end do
-        do q=4,1,-1
-          f = e(q,1)
-          do l=q+1,4
-            f = f - e(q,l+1)*zz(l)
+          do q=4,1,-1
+            f = e(q,1)
+            do l=q+1,4
+              f = f - e(q,l+1)*zz(l)
+            end do
+            zz(q) = f/e(q,q+1)
           end do
-          zz(q) = f/e(q,q+1)
+        end if
+        !
+        ! final solve with the combined right-hand side
+        !
+        do r=2,ny-1
+          sxb(ic,r) = zero
+          do q=max(-1,2-r),min(1,ny-1-r)
+            sxb(ic,r) = sxb(ic,r) + a2(q,r)*s(i,r+q,n)
+          end do
         end do
-      end if
-      !
-      ! final solve with the combined right-hand side
-      !
-      do r=2,ny-1
-        sx(i,r) = zero
-        do q=max(-1,2-r),min(1,ny-1-r)
-          sx(i,r) = sx(i,r) + a2(q,r)*s(i,r+q)
+        sxb(ic,2)    = sxb(ic,2)    + zz(1)*a2(-1,2)
+        sxb(ic,ny-1) = sxb(ic,ny-1) + zz(2)*a2( 1,ny-1)
+        sxb(ic,1)  = zz(3)
+        sxb(ic,ny) = zz(4)
+        if(ismean(i)) then
+          if(.not.isnb) sxb(ic,1)  = gb
+          if(.not.isnt) sxb(ic,ny) = gt
+        end if
+        call bsolve(ncol,ny,ic,klh,kuh,ca,cb,a2,b2,.true.,.true.,sxb,ufb)
+        do r=1,ny
+          s(i,r,n) = sxb(ic,r)
         end do
-      end do
-      sx(i,2)    = sx(i,2)    + zz(1)*a2(-1,2)
-      sx(i,ny-1) = sx(i,ny-1) + zz(2)*a2( 1,ny-1)
-      sx(i,1)  = zz(3)
-      sx(i,ny) = zz(4)
-      if(ismean(i)) then
-        if(.not.isnb) sx(i,1)  = gb
-        if(.not.isnt) sx(i,ny) = gt
-      end if
-      call bsolve(nkx,ny,i,klh,kuh,ca,cb,a2,b2,.true.,.true.,sx,uf)
-      do r=1,ny
-        s(i,r) = sx(i,r)
       end do
     end do
   end subroutine scalar_solve
@@ -559,6 +638,18 @@ contains
       dw1(:) = c1(:); dwn(:) = cn(:)
       ndw1 = nc1; ndwn = ncn
     end if
+    if(freeslip_bot) then
+      !
+      ! free-slip bottom wall: du/dy = i D2 v/kx = 0, i.e. d2v/dy2 = 0 at y = -1 (with v = 0), with
+      ! the 7-point one-sided derivative ('explicit') or the first row of the compact D2 ('compact')
+      !
+      dw1(:) = 0._rp
+      if(vv_neumann == 'explicit') then
+        dw1(1:7) = cew2(:); ndw1 = 7
+      else
+        dw1(:) = cc21(:); ndw1 = cnc21
+      end if
+    end if
     !$acc enter data copyin(dw1,dwn)
     !
     ! wall corrections of the (kx-only) operator  kx^2 - D2  used for (D2 - kx^2) v = phi
@@ -584,6 +675,8 @@ contains
     complex(rp), intent(in)    :: v(nkx,ny)
     integer :: i,r
     real(rp) :: kx
+    logical :: fsb
+    fsb = freeslip_bot
     !$acc parallel loop gang vector default(present) private(kx) async(1)
     do i=1,nkx
       if(.not.ismean(i)) then
@@ -592,7 +685,8 @@ contains
         do r=1,ny
           u(i,r) = cmplx(0._rp,1._rp/kx,rp)*wa(i,r)
         end do
-        u(i,1) = (0._rp,0._rp); u(i,ny) = (0._rp,0._rp)
+        if(.not.fsb) u(i,1) = (0._rp,0._rp)
+        u(i,ny) = (0._rp,0._rp)
       end if
     end do
   end subroutine vel_from_v
@@ -714,7 +808,9 @@ contains
     integer :: i,r,l
     real(rp) :: kx,k2,ca,cb,h(4),hv(4)
     complex(rp) :: zero,d1,dn,cp,cm
+    logical :: fsb
     zero = (0._rp,0._rp)
+    fsb = freeslip_bot
     if(c /= c_cached_vv(q)) then
       call vv_matrices(q,c)
       c_cached_vv(q) = c
@@ -729,9 +825,9 @@ contains
       end do
       if(ismean(i)) then
         !
-        ! mean flow U (kx = 0), U = 0 at the walls
+        ! mean flow U (kx = 0): U = 0 at the top wall; U = 0 (no-slip) or dU/dy = 0 (free-slip) at the bottom
         !
-        call hsolve_ab(nkx,ny,i,klh,kuh,ca,cb,a2,b2,h,phv,sx,uf,zero,zero)
+        call hsolve_mean(nkx,ny,i,klh,kuh,ca,cb,a2,b2,h,phv,sx,wa,wb,uf,c1,nc1,fsb)
         do r=1,ny
           phv(i,r) = sx(i,r)
           u(i,r) = sx(i,r); v(i,r) = zero
@@ -755,7 +851,7 @@ contains
         do r=ny-ndwn+1,ny
           dn = dn + dwn(r)*wa(i,r)
         end do
-        ! wall values of phi such that D1 v = 0 at both walls
+        ! wall values of phi such that D1 v = 0 at both walls (free-slip bottom: D2 v = 0 there)
         cp = -(ginv_v(1,i,q)*d1 + ginv_v(3,i,q)*dn)
         cm = -(ginv_v(2,i,q)*d1 + ginv_v(4,i,q)*dn)
         call hsolve_ab(nkx,ny,i,klh,kuh,ca,cb,a2,b2,h,phv,sx,uf,cp,cm)
@@ -771,14 +867,15 @@ contains
         do r=1,ny
           u(i,r) = cmplx(0._rp,1._rp/kx,rp)*wa(i,r)
         end do
-        u(i,1) = zero; u(i,ny) = zero
+        if(.not.fsb) u(i,1) = zero
+        u(i,ny) = zero
       end if
     end do
   end subroutine vv_step
   !
   subroutine vv_cfr(u,ub_target,dpdx_eff,coef,c,q)
     !
-    ! constant flow rate: U <- U + alpha h with (1 - c D2) h = 1, h = 0 at the walls
+    ! constant flow rate: U <- U + alpha h with (1 - c D2) h = 1 and the wall conditions of U
     !
     implicit none
     complex(rp), intent(inout) :: u(nkx,ny)
@@ -788,9 +885,11 @@ contains
     real(rp) :: ub,hb,alpha,h(4)
     complex(rp) :: zero
     integer :: r,l
+    logical :: fsb
     dpdx_eff = 0._rp
     if(.not.mean_owner) return
     zero = (0._rp,0._rp)
+    fsb = freeslip_bot
     !$acc serial default(present) private(h) async(1)
     do l=1,4
       h(l) = hinv_c(l,i00,q)
@@ -798,7 +897,7 @@ contains
     do r=1,ny
       wb(i00,r) = (1._rp,0._rp)
     end do
-    call hsolve_ab(nkx,ny,i00,klh,kuh,1._rp,-c,a2,b2,h,wb,sx,uf,zero,zero)
+    call hsolve_mean(nkx,ny,i00,klh,kuh,1._rp,-c,a2,b2,h,wb,sx,wa,psi,uf,c1,nc1,fsb)
     !$acc end serial
     ub = 0._rp; hb = 0._rp
     !$acc parallel loop default(present) reduction(+:ub,hb) async(1)

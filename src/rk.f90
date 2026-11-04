@@ -350,21 +350,22 @@ contains
       end if
       call toc(tm_vsolve)
       !
-      ! scalars: r = s + dt(gam N + zet N_old) + (1-theta) beta dt kappa Lap(s), then the theta-solve
+      ! scalars: r = s + dt(gam N + zet N_old) + (1-theta) beta dt kappa Lap(s) for each scalar,
+      ! then the theta-solves of all scalars in one batched kernel (c_n = theta_n beta dt kappa_n)
       !
       do n=1,nscal
         th = scal_theta(n)
         if(th > 0._rp) then
           call rhs_theta(s(:,:,n),ns(:,:,n),nso(:,:,n),dtg,dtz,(1._rp-th)*dtb*diff(n))
-          c = th*dtb*diff(n)
         else
           call update(s(:,:,n),ns(:,:,n),nso(:,:,n),dtg,dtz)
-          c = 0._rp
         end if
-        call tic(tm_ssolve)
-        call scalar_solve(s(:,:,n),c,sbc_bot(n),sbc_top(n),sval_bot(n),sval_top(n))
-        call toc(tm_ssolve)
       end do
+      if(nscal > 0) then
+        call tic(tm_ssolve)
+        call scalar_solve(s,nscal,dtb)
+        call toc(tm_ssolve)
+      end if
     end do
     !$acc wait(1)
     time = time + dtcur

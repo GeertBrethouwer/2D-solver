@@ -33,6 +33,9 @@ module mod_compact
   real(rp), allocatable, public :: rxi(:)          ! 1/(dy/dxi): D1m = diag(rxi) D_xi (metric first derivative)
   real(rp), public :: ew1(6),ewn(6)                ! explicit one-sided 6-point d/dy at y = -1 (points 1..6)
                                                    ! and y = +1 (points ny-5..ny)
+  real(rp), public :: ew2(7)                       ! explicit one-sided 7-point d2/dy2 at y = -1 (5th order)
+  real(rp), allocatable, public :: c21(:)          ! first row of D2 = A2^{-1} B2 (dense)
+  integer , public :: nc21                         ! effective extent of c21
 contains
   subroutine init_grid(ny,grid_type,alpha,grid_file)
     implicit none
@@ -146,6 +149,25 @@ contains
     lam2max = spectral_radius_d2(ny)
     call wall_derivative(yg(1:6),yg(1),ew1)
     call wall_derivative(yg(ny-5:ny),yg(ny),ewn)
+    call fd_weights(7,yg(1:7),yg(1),2,ew2)
+    !
+    ! dense first row of D2 (free-slip wall: d2v/dy2 = 0), truncated below round-off
+    !
+    allocate(c21(ny))
+    call tri_transpose_solve(ny,a2,1,z)
+    c21(:) = 0._rp
+    do i=1,ny
+      do l=-nbw,nbw
+        j = i+l
+        if(j >= 1 .and. j <= ny) c21(j) = c21(j) + z(i)*b2(l,i)
+      end do
+    end do
+    cmax = maxval(abs(c21)); nc21 = ny
+    do j=ny,1,-1
+      if(abs(c21(j)) > 1.e-17_rp*cmax) exit
+      nc21 = j-1
+    end do
+    nc21 = max(nc21,3)
     if(order == 4) then
       kappa1 = 1.74_rp
     else
@@ -210,6 +232,30 @@ contains
       wts(a) = s/den
     end do
   end subroutine wall_derivative
+  !
+  subroutine fd_weights(m,yp,x0,d,wts)
+    ! weights of the d-th derivative at x0 of the polynomial through the m points yp(1:m)
+    implicit none
+    integer , intent(in)  :: m,d
+    real(rp), intent(in)  :: yp(m),x0
+    real(rp), intent(out) :: wts(m)
+    real(rp) :: mat(m,m),h,f
+    integer :: j,k
+    h = yp(m)-yp(1)
+    do k=0,m-1
+      do j=1,m
+        mat(k+1,j) = ((yp(j)-x0)/h)**k
+      end do
+      wts(k+1) = 0._rp
+    end do
+    f = 1._rp
+    do k=2,d
+      f = f*k
+    end do
+    wts(d+1) = f
+    call dense_solve(m,mat,wts)
+    wts(:) = wts(:)/h**d
+  end subroutine fd_weights
   !
   subroutine stencil(i,ny,order,der,nl,lo,nr,ro)
     !

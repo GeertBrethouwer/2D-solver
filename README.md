@@ -15,7 +15,9 @@ output files and GPU design are the same as in HiCHAN, with the spanwise directi
 * **Time:** three-substep RK3 of Spalart, Moser & Rogers (1991). The viscous terms are implicit; scalar
   diffusion uses the θ-method.
 * **Scalars:** any number (default 2), passive or active, with Dirichlet or Neumann walls, sources, and gravity in
-  any direction in the x–y plane.
+  any direction in the x–y plane. All scalars are solved in one batched GPU kernel.
+* **Walls:** the top wall is no-slip. The bottom wall is no-slip or free-slip (`bc_bot`), e.g. for an
+  open channel.
 * **Parallelisation:** MPI with one rank per GPU, OpenACC kernels and cuFFT, made for one NSC Arrhenius node
   (4 × NVIDIA GH200). The same source runs on CPUs with FFTW.
 
@@ -31,7 +33,16 @@ u     = i D1 v / kx                (continuity, i kx u + D1 v = 0)
 ```
 
 and for `kx = 0` the mean flow `∂U/∂t = N_x,00 + (1/Re) D2 U` (U = 0 at the walls), with a constant flow rate
-or a constant pressure gradient. In 2D there is no wall-normal vorticity (ω_y = ∂u/∂z − ∂w/∂x = 0), so φ
+or a constant pressure gradient.
+
+**Free-slip bottom wall** (`bc_bot = 'freeslip'`): v = 0 and ∂u/∂y = 0 at y = −1. Since u = i D1 v/kx, the
+second condition becomes ∂²v/∂y² = 0 there. It replaces dv/dy = 0 in the same 2×2 influence-matrix
+superposition, so the cost is unchanged. The wall functional is a 7-point one-sided second derivative
+(`vv_neumann = 'explicit'`) or the first row of the compact D2 (`'compact'`). The mean flow gets
+dU/dy = 0 at y = −1, by superposition with the homogeneous solution U(−1) = 1, using the compact D1 row. The
+laminar initial profile is then the open-channel profile U = U_max(1 − η²), η = (y+1)/2. With CFR,
+−dp/dx = 0.75/Re for U_b = 1. In `log.dat`, τ_w and Re_τ are those of the (no-slip) top wall. The scalars keep
+their own wall conditions (`sbc_bot`). In 2D there is no wall-normal vorticity (ω_y = ∂u/∂z − ∂w/∂x = 0), so φ
 alone carries the dynamics. It is the x-derivative of the spanwise vorticity, φ = ∂ω_z/∂x.
 
 The scalars obey `∂s/∂t + u·∇s = (1/(Re Pr)) ∇²s + Q`, and act on the flow as `−Σ ri(n) s_n e_g`. Here `e_g`
@@ -68,6 +79,7 @@ src/timer.f90      optional timers
 src/main.f90       main program
 configs/           arrhenius.mk, generic_gpu.mk
 examples/          input_reference.nml (every input item), ts_wave, rayleigh_benard (two active scalars),
+                   rayleigh_benard_freeslip (free-slip bottom wall),
                    salt_fingers (two scalars with opposite buoyancy), salt_fingers_gpu (production-size
                    template for one Arrhenius node), arrhenius_job.sh
 tools/             os_mode.py (Orr–Sommerfeld mode for init_type = 'mode'; needs numpy, scipy),
@@ -111,10 +123,18 @@ available where it was written. Everything else was tested on CPU, including the
 The FFTs, transposes and pointwise products are well parallel. The wall-normal solves are not: they use
 one GPU thread per wavenumber, i.e. only nx/2/(number of GPUs) threads per GPU (512 for nx = 4096 on 4 GPUs),
 each marching sequentially over ny points. In 3D HiCHAN has nx·nz/2 such columns; in 2D there are far fewer.
-GPUs therefore pay off for large nx. For small or moderate grids, one GPU, or the CPU build, can be as fast
-or faster than four GPUs. Use `timing = .true.` to see where the time goes. If the column solves dominate,
-the next step would be to batch the scalar solves into one kernel, which needs per-scalar work arrays
-(not done yet).
+Such kernels are latency bound, and their run time hardly depends on the number of threads.
+
+The scalar Helmholtz solves are therefore **batched**: one kernel over all (kx, scalar) pairs, with
+nscal·nkx threads and one work column per pair. With two scalars this costs about one scalar solve instead
+of two. The threads of a warp belong to the same scalar, so Dirichlet and Neumann scalars do not diverge
+within a warp (if nkx is a multiple of 32). The results are bit-identical to solving the scalars one by one.
+
+A further step, not implemented: within an RK substep the scalar solves are independent of the velocity
+step, so the two could run concurrently on separate OpenACC queues (each needs its own work arrays).
+
+GPUs pay off for large nx. For small or moderate grids, one GPU, or the CPU build, can be as fast as four.
+Use `timing = .true.` to see where the time goes.
 
 ## Input
 
@@ -171,6 +191,10 @@ python3 tools/plot_field.py data 8000 s1 s2 v -o fields.png
 | Restart: 20 steps vs 10 + restart + 10 (2 → 3 ranks, adaptive Δt) | identical to round-off (5e-15); `log.dat` identical |
 | OpenACC code path (`ACC_HOST=1`, 4 ranks) | same as the CPU build to 7e-15, `log.dat` identical |
 | `DEBUG=1` (bounds checks, FP traps), nonlinear two-scalar case on 3 ranks | clean |
+| Batched scalar solve (both scalars in one kernel; one Dirichlet, one Neumann/Dirichlet with source) | bit-identical to the per-scalar solves |
+| Free-slip bottom, laminar CFR (`bc_bot = 'freeslip'`) | open-channel profile kept exactly, −dp/dx = 0.75/Re, τ_w = 1.5/Re (top wall) |
+| Rayleigh–Bénard onset, free-slip bottom / no-slip top, two active scalars (`examples/rayleigh_benard_freeslip`) | Ra_c = 1100.59 (ny = 33), 1100.64 (ny = 65); linear theory 1100.65 (rigid–free) |
+| Free-slip, nonlinear two-scalar case | bit-identical on 1 and 4 ranks; OpenACC host build agrees to 8e-14; ∂u/∂y at the free-slip wall converges to 0 with refinement (0.25, 0.019, 0.0017 for ny = 49, 97, 193, vs ~6.3 at the no-slip wall) |
 | Salt fingers, R_ρ = 1.2, Pr = 7, Sc = 21 (`examples/salt_fingers`, 256 × 129) | fingers grow from noise and saturate; wall flux of salt ×3.3 and of heat ×2.3 the conductive value; divergence ~1e-5 (wall rows) |
 
 The TS-wave and Rayleigh–Bénard checks:

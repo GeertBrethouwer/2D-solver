@@ -21,6 +21,10 @@
                            ! more accurate) or the boundary row of the compact D1 ('compact': divergence
                            ! exactly zero also at the walls)
   nl_form = 'rotational'   ! 'rotational' u x omega (5 FFTs, energy conserving) or 'advective' (8 FFTs)
+  bc_bot = 'noslip'        ! bottom wall y = -1: 'noslip' (u = v = 0) or 'freeslip' (v = 0, du/dy = 0,
+                           ! e.g. an open channel or a free surface); the top wall is always no-slip.
+                           ! 'freeslip' imposes d2v/dy2 = 0 (7-point one-sided with vv_neumann =
+                           ! 'explicit', first row of the compact D2 with 'compact') and dU/dy = 0
 /
 &time
   nstep = 1000             ! maximum number of time steps

@@ -179,7 +179,11 @@ contains
     end do
     call MPI_ALLREDUCE(MPI_IN_PLACE,buf,2+2*nscal,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,ierr)
     gb = buf(1); gt = buf(2)
-    tauw = 0.5_rp*visc*(abs(gb)+abs(gt))
+    if(freeslip_bot) then
+      tauw = visc*abs(gt)                         ! free-slip bottom wall: shear stress of the top wall
+    else
+      tauw = 0.5_rp*visc*(abs(gb)+abs(gt))
+    end if
     retau = sqrt(tauw)/visc
     em = 0._rp
     if(mode_log_kx >= 0) em = mode_energy(u,v,mode_log_kx)
