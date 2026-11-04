@@ -1,0 +1,76 @@
+!======================================================================================================
+!  solver2d: every input item with its default value. Copy as input.nml and edit.
+!  Units: half-height h = 1 (y in [-1,1]), velocity U_ref, time h/U_ref; re = U_ref h/nu.
+!======================================================================================================
+&grid
+  nx = 64                  ! Fourier modes in x (even); kx = 0..nx/2-1 are kept (Nyquist dropped)
+  ny = 65                  ! wall-normal points incl. both walls (>= 9)
+  lx = 6.283185307179586   ! box length
+  grid_type = 'tanh'       ! 'tanh' (y = tanh(alpha(xi-1/2))/tanh(alpha/2)), 'uniform', 'file'
+  grid_alpha = 2.0         ! stretching of the tanh grid
+  grid_file = 'grid.in'    ! 'file': ny values of y, increasing, from -1 to 1
+  fd_order = 6             ! 4 -> (3-4-3), 6 -> (3-5-6-5-3) compact schemes
+  dealias = .true.         ! 3/2 rule in x (physical grid mx = 3 nx/2)
+/
+&physics
+  re = 2800.               ! Reynolds number U_ref h/nu
+  forcing = 'cfr'          ! 'cfr' constant flow rate, 'cpg' constant pressure gradient
+  ubulk = 1.0              ! 'cfr': bulk velocity
+  dpdx = 0.0               ! 'cpg': -dp/dx (0 with no mean flow, e.g. convection)
+  vv_neumann = 'explicit'  ! dv/dy = 0 at the walls with a 6-point one-sided derivative ('explicit',
+                           ! more accurate) or the boundary row of the compact D1 ('compact': divergence
+                           ! exactly zero also at the walls)
+  nl_form = 'rotational'   ! 'rotational' u x omega (5 FFTs, energy conserving) or 'advective' (8 FFTs)
+/
+&time
+  nstep = 1000             ! maximum number of time steps
+  tmax = 1.e300            ! stop at this time
+  wall_time_max = 1.e300   ! stop (writing a restart file) after this many seconds
+  dt = 1.e-5               ! fixed time step, or the first step of an adaptive run
+  fixed_dt = .false.
+  dt_max = 1.0             ! upper bound of the adaptive dt
+  dt_growth = 1.1          ! adaptive dt grows by at most this factor per step
+  cfl = 1.0                ! advective CFL number (RK3 limit sqrt(3)); also internal-wave limit dt <= cfl/N
+  cfl_visc = 1.5           ! explicit diffusion of scalars with scal_theta < 1/2 (RK3 limit 2.51)
+/
+&init
+  init_type = 'laminar'    ! 'laminar', 'noise' (random v, rms init_amp*U_b), 'mode' (one Fourier
+                           ! mode from mode_file, e.g. tools/os_mode.py), 'restart'
+  init_amp = 0.1
+  init_seed = 1
+  mode_file = 'mode.in'    ! ny lines: Re(u) Im(u) Re(v) Im(v) [Re(w) Im(w)]; only v is used
+  mode_kx = 1              ! integer wavenumber of the mode (kx = 2 pi mode_kx/lx)
+  restart_file = 'restart' ! reads restart.hdr and restart.bin
+  reset_time = .false.     ! restart with t = 0, step 0
+/
+&output
+  data_dir = 'data'
+  iout_log = 10            ! log.dat every iout_log steps
+  iout_stats = 10          ! accumulate statistics every iout_stats steps (from t >= tstats_start)
+  iout_save_stats = 1000   ! write stats.dat
+  iout_restart = 5000      ! write restart files (also at the end of the run)
+  iout_field = 0           ! write physical 2D fields (fld_*.bin + .xmf for ParaView), 0 = never
+  tstats_start = 0.0
+  mode_log_kx = -1         ! >= 0: energy of this Fourier mode in column 10 of log.dat
+  timing = .false.         ! timers: report at the end (data_dir/timing_report.txt)
+/
+&scalars
+  nscal = 2                ! number of scalars (0..16); two by default
+  pr(1) = 1.0              ! Prandtl/Schmidt number of each scalar (per index: pr(2) = ...)
+  scal_theta(1) = 0.5      ! theta-method for the diffusion (0.5 Crank-Nicolson, 1 implicit Euler,
+                           ! 0 explicit RK3)
+  sbc_bot(1) = 'D'         ! 'D' Dirichlet (value) or 'N' Neumann (wall-normal gradient)
+  sbc_top(1) = 'D'
+  sval_bot(1) = 1.0        ! wall value or gradient at y = -1
+  sval_top(1) = -1.0       ! wall value or gradient at y = +1
+  ssrc_const(1) = 0.0      ! uniform source Q_c
+  ssrc_u(1) = 0.0          ! source Q_u u/ubulk
+  sinit(1) = 'linear'      ! 'linear' (between the Dirichlet values), 'zero', 'noise' (linear + noise)
+  scal_form = 'advective'  ! 'advective', 'divergence', or 'skew' (conserves the scalar variance)
+/
+&buoyancy
+  gravity = 0.0, -1.0      ! direction of gravity (x, y), any orientation, normalised internally
+  ri(1) = 0.0              ! Richardson number of each scalar: momentum source -ri(n) s_n e_g;
+                           ! > 0 for a scalar that makes the fluid lighter (temperature),
+                           ! < 0 for one that makes it heavier (salinity), 0 = passive
+/

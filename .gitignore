@@ -1,0 +1,9 @@
+build/
+data/
+run_*/
+out.txt
+mode.in
+*.o
+*.mod
+*.png
+__pycache__/

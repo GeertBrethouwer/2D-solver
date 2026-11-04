@@ -1,0 +1,31 @@
+!======================================================================================================
+!  2D Tollmien-Schlichting wave, Re = 5000 (centreline velocity), alpha = 1.12
+!  (Lenaers et al. 2014, Sec. 5.1; the TS-wave test of HiCHAN).
+!  1) initial mode:  python3 ../../tools/os_mode.py --re 5000 --alpha 1.12 --ny 65 --grid tanh --galpha 4.0 -o mode.in
+!  2) run (mpirun -np 1 ../../build/solver2d), 3) python3 check.py :
+!     E_mode ~ exp(2 omega_i t), omega_i = -2.7829e-3 (c_i = -2.4847e-3)
+!======================================================================================================
+&grid
+  nx = 4, ny = 65                      ! one streamwise mode is enough (linear problem)
+  lx = 5.609986881410345               ! lx = 2 pi / 1.12
+  grid_type = 'tanh', grid_alpha = 4.0, fd_order = 6
+/
+&physics
+  re = 5000., forcing = 'cfr'
+  ubulk = 0.6666666666666667           ! laminar Poiseuille with centreline velocity 1
+  nl_form = 'advective'
+/
+&time
+  nstep = 1000000, tmax = 30.0, fixed_dt = .true., dt = 0.002
+/
+&init
+  init_type = 'mode', mode_file = 'mode.in', mode_kx = 1
+  init_amp = 1.e-6                     ! small: linear regime
+/
+&output
+  iout_log = 250, iout_stats = 0, iout_save_stats = 0, iout_restart = 0
+  mode_log_kx = 1                      ! energy of the TS mode in column 10 of log.dat
+/
+&scalars
+  nscal = 0
+/

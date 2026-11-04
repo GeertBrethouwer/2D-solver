@@ -1,0 +1,40 @@
+!======================================================================================================
+!  Double-diffusive convection (salt fingers) between two walls: two ACTIVE scalars with opposite
+!  effects on the density. No mean flow, gravity along -y.
+!    scalar 1 = temperature T: warm on top (T = +1 top, -1 bottom), ri(1) > 0 (warm fluid is light):
+!               stabilising
+!    scalar 2 = salinity S:    salty on top (S = +1 top, -1 bottom), ri(2) < 0 (salty fluid is heavy):
+!               destabilising
+!  Density ratio R_rho = ri(1)*dT/(|ri(2)|*dS) = 1.2 (statically stable, but finger-unstable because
+!  heat diffuses faster than salt: Pr = 7, Sc = 21).
+!  Ra_T = 16 ri(1) re^2 Pr = 2.7e5, Ra_S = 16 |ri(2)| re^2 Sc = 6.7e5 (gap d = 2h).
+!  Fingers grow from small noise; log.dat gives the wall fluxes dS/dy of both scalars (columns 11-14).
+!======================================================================================================
+&grid
+  nx = 256, ny = 129
+  lx = 2.0
+  grid_type = 'tanh', grid_alpha = 1.5, fd_order = 6
+/
+&physics
+  re = 100., forcing = 'cpg', dpdx = 0.0
+/
+&time
+  nstep = 100000, tmax = 150., dt = 1.e-3, dt_max = 0.02, cfl = 0.8
+/
+&init
+  init_type = 'noise', init_amp = 1.e-3
+/
+&output
+  iout_log = 50, iout_stats = 10, iout_save_stats = 1000, iout_restart = 5000, iout_field = 1000
+  tstats_start = 100.
+/
+&scalars
+  nscal = 2, scal_form = 'skew'
+  pr(1) = 7.0,  sbc_bot(1) = 'D', sval_bot(1) = -1.0, sbc_top(1) = 'D', sval_top(1) = 1.0, sinit(1) = 'linear'
+  pr(2) = 21.0, sbc_bot(2) = 'D', sval_bot(2) = -1.0, sbc_top(2) = 'D', sval_top(2) = 1.0, sinit(2) = 'noise'
+/
+&buoyancy
+  gravity = 0.0, -1.0
+  ri(1) =  0.24                         ! temperature: stabilising
+  ri(2) = -0.2                          ! salinity: destabilising
+/
