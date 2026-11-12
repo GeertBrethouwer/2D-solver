@@ -16,9 +16,10 @@ output files and GPU design are the same as in HiCHAN, with the spanwise directi
   diffusion uses the θ-method.
 * **Scalars:** any number (default 2), passive or active, with Dirichlet or Neumann walls, sources, and gravity in
   any direction in the x–y plane. All scalars are solved in one batched GPU kernel.
-* **Walls:** the top wall is no-slip. The bottom wall is no-slip or free-slip (`bc_bot`), e.g. for an
-  open channel. The walls are at y = 0 and y = `ly` (box height, default 2). The default grid is refined at
-  every no-slip wall: at both walls, or only at the top wall when the bottom wall is free-slip.
+* **Walls:** at y = 0 and y = `ly` (box height, default 2). Each is no-slip or free-slip (`bc_bot` for y = 0,
+  `bc_top` for y = `ly`; at most one free-slip), e.g. for an open channel or water under an ice layer. The
+  default grid is refined at every no-slip wall: at both walls, or only at the no-slip one.
+  "bot"/"top" in the input always mean y = 0 / y = `ly`, whatever the direction of gravity.
 * **Parallelisation:** MPI with one rank per GPU, OpenACC kernels and cuFFT, made for one NSC Arrhenius node
   (4 × NVIDIA GH200). The same source runs on CPUs with FFTW.
 
@@ -37,14 +38,20 @@ and for `kx = 0` the mean flow `∂U/∂t = N_x,00 + (1/Re) D2 U` (U = 0 at the 
 or a constant pressure gradient. In 2D there is no wall-normal vorticity (ω_y = ∂u/∂z − ∂w/∂x = 0), so φ
 alone carries the dynamics. It is the x-derivative of the spanwise vorticity, φ = ∂ω_z/∂x.
 
-**Free-slip bottom wall** (`bc_bot = 'freeslip'`): v = 0 and ∂u/∂y = 0 at the bottom wall. Since u = i D1 v/kx, the
-second condition becomes ∂²v/∂y² = 0 there. It replaces dv/dy = 0 in the same 2×2 influence-matrix
-superposition, so the cost is unchanged. The wall functional is a 7-point one-sided second derivative
-(`vv_neumann = 'explicit'`) or the first row of the compact D2 (`'compact'`). The mean flow gets
-dU/dy = 0 at the bottom wall, by superposition with the homogeneous solution U(−1) = 1, using the compact D1 row. The
-laminar initial profile is then the open-channel profile U = U_max(1 − (y/ly)²). With CFR,
-−dp/dx = 3/(Re ly²) for U_b = 1 (0.75/Re for ly = 2), against 12/(Re ly²) with two no-slip walls. In `log.dat`, τ_w and Re_τ are those of
-the (no-slip) top wall. The scalars keep their own wall conditions (`sbc_bot`).
+**Free-slip wall** (`bc_bot = 'freeslip'` at y = 0, or `bc_top = 'freeslip'` at y = `ly`; at most one):
+* **The condition:** v = 0 and ∂u/∂y = 0 at that wall. Since u = i D1 v/kx, the second condition becomes
+  ∂²v/∂y² = 0 there. It replaces dv/dy = 0 in the same 2×2 influence-matrix superposition, so the cost is
+  unchanged.
+* **The wall operator:** a 7-point one-sided second derivative (`vv_neumann = 'explicit'`), or the first/last
+  row of the compact D2 (`'compact'`).
+* **The mean flow:** dU/dy = 0 at that wall, imposed by superposition with the homogeneous solution U = 1 at
+  that wall, using the compact D1 row.
+* **Laminar start:** the open-channel profile U = U_max(1 − ζ²), with ζ = distance from the free-slip wall/`ly`.
+  With CFR, −dp/dx = 3/(Re ly²) for U_b = 1 (0.75/Re for `ly` = 2), against 12/(Re ly²) with two no-slip walls.
+* **Output:** in `log.dat`, τ_w and Re_τ are those of the no-slip wall.
+* **Scalars:** they keep their own wall conditions (`sbc_bot`, `sbc_top`).
+* **Check:** a run with the free-slip wall at y = `ly` is the exact mirror image (to round-off) of the same run
+  with the free-slip wall at y = 0, when gravity and the scalar wall conditions are mirrored too.
 
 **Wall-normal domain and grid.**
 * `ly` in `&grid` is the box height: the walls are at y = 0 and y = `ly`, default 2. `re`, `lx` and `ly`
@@ -52,9 +59,11 @@ the (no-slip) top wall. The scalars keep their own wall conditions (`sbc_bot`).
   with half-height 1, as in HiCHAN (there with walls at ±1).
 * Restart files store the wall positions. A restart is accepted if the box height is the same, so files of
   earlier versions (walls at −1 and 1) can be restarted with `ly = 2`.
-* `grid_type = 'auto'` (default) chooses `'tanh'` (refined at both walls) with two no-slip walls, and
-  `'tanh_top'` (refined only at the no-slip top wall, coarse at the free-slip bottom) with `bc_bot = 'freeslip'`.
-* With the same `grid_alpha`, `'tanh_top'` with ny points is exactly the upper half of the `'tanh'` grid of a
+* `grid_type = 'auto'` (default) chooses:
+  * `'tanh'` (refined at both walls) with two no-slip walls;
+  * `'tanh_top'` (refined only at y = `ly`) with `bc_bot = 'freeslip'`;
+  * `'tanh_bot'` (refined only at y = 0, the mirror image) with `bc_top = 'freeslip'`.
+* With the same `grid_alpha`, `'tanh_top'`/`'tanh_bot'` with ny points is exactly one half of the `'tanh'` grid of a
   channel twice as deep with 2·ny − 1 points. So an open channel of depth h gets the near-wall resolution of a
   closed channel of half-height h.
 * Other choices: `'tanh'` or `'uniform'` explicitly, or `'file'` (ny values of y from the bottom to the top
@@ -98,7 +107,8 @@ src/timer.f90      optional timers
 src/main.f90       main program
 configs/           arrhenius.mk, generic_gpu.mk
 examples/          input_reference.nml (every input item), ts_wave, rayleigh_benard (two active scalars),
-                   rayleigh_benard_freeslip (free-slip bottom wall),
+                   rayleigh_benard_freeslip (free-slip bottom wall), ice_layer (template: water under ice,
+                   no-slip refined wall at y = 0, free-slip at y = ly, gravity +y),
                    salt_fingers (two scalars with opposite buoyancy), salt_fingers_gpu (production-size
                    template for one Arrhenius node), arrhenius_job.sh
 tools/             os_mode.py (Orr–Sommerfeld mode for init_type = 'mode'; needs numpy, scipy),
@@ -161,7 +171,7 @@ Use `timing = .true.` to see where the time goes.
 
 | namelist | contents |
 |---|---|
-| `&grid` | `nx` (Fourier modes, even), `ny` (points incl. walls), `lx`, `ly` (box height; walls at y = 0 and ly; default 2), `grid_type` (`auto`/`tanh`/`tanh_top`/`uniform`/`file`), `grid_alpha`, `grid_file`, `fd_order` (4 or 6), `dealias` |
+| `&grid` | `nx` (Fourier modes, even), `ny` (points incl. walls), `lx`, `ly` (box height; walls at y = 0 and ly; default 2), `grid_type` (`auto`/`tanh`/`tanh_top`/`tanh_bot`/`uniform`/`file`), `grid_alpha`, `grid_file`, `fd_order` (4 or 6), `dealias` |
 | `&physics` | `re`, `forcing` (`cfr`/`cpg`), `ubulk`, `dpdx`, `vv_neumann` (`explicit`/`compact`), `nl_form` (`rotational`/`advective`) |
 | `&time` | `nstep`, `tmax`, `wall_time_max`, `fixed_dt`, `dt`, `dt_max`, `dt_growth`, `cfl`, `cfl_visc` |
 | `&init` | `init_type` (`laminar`/`noise`/`mode`/`restart`), `init_amp`, `init_seed`, `mode_file`, `mode_kx`, `restart_file`, `reset_time` |
@@ -184,7 +194,7 @@ with wall difference Δs is `Ra = ri Δs ly³ re² pr` (`8 ri Δs re² pr` for `
   5. applied −dp/dx
   6. τ_w
   7. Re_τ = u_τ δ/ν, with δ = half the wall distance, or the full wall distance (open-channel depth) with a
-     free-slip bottom wall
+     free-slip wall
   8. max |div u|
   9. fluctuation energy
   10. energy of mode `mode_log_kx`
@@ -219,6 +229,10 @@ python3 tools/plot_field.py data 8000 s1 s2 v -o fields.png
 | Default domain and grid after these changes | bit-identical to the previous version; restart headers of the previous version are still read |
 | ly = 2.5, free-slip, `'auto'` grid, nonlinear, two active scalars | bit-identical on 1 and 4 ranks; 150 steps + restart (2 → 3 ranks) + 150 steps agrees with 300 steps to 1.5e-13; OpenACC host build agrees to 7e-13; `DEBUG=1` clean |
 | Rayleigh–Bénard onset, free-slip bottom / no-slip top, two active scalars (`examples/rayleigh_benard_freeslip`) | Ra_c = 1100.59 (ny = 33), 1100.64 (ny = 65); linear theory 1100.65 (rigid–free) |
+| Free-slip wall at y = `ly` (`bc_top`): no-slip and free-slip-at-y = 0 runs after the change | bit-identical to the previous version |
+| Free-slip at y = `ly`, laminar, `ly` = 1, CFR and CPG (`'auto'` → `'tanh_bot'`) | exact: −dp/dx = 3/Re, U_b = 1, Re_τ = 54.77; grid the mirror image of `'tanh_top'` |
+| Mirror test: nonlinear two-scalar run (`ly` = 2.5, oblique gravity, Neumann scalar wall, source) with the free-slip wall at y = 0, against the mirrored set-up with the free-slip wall at y = `ly` (gravity, wall values and Neumann gradients mirrored), 200 steps, 2 vs 3 ranks | mirror images to round-off (≤ 3e-14); identical −dp/dx and τ_w |
+| Rayleigh–Bénard onset, free-slip wall at y = `ly` | Ra_c = 1100.59 (as with the free-slip wall at y = 0; theory 1100.65) |
 | Free-slip, nonlinear two-scalar case | bit-identical on 1 and 4 ranks; OpenACC host build agrees to 8e-14; ∂u/∂y at the free-slip wall converges to 0 with refinement (0.25, 0.019, 0.0017 for ny = 49, 97, 193, vs ~6.3 at the no-slip wall) |
 | Salt fingers, R_ρ = 1.2, Pr = 7, Sc = 21 (`examples/salt_fingers`, 256 × 129) | fingers grow from noise and saturate; wall flux of salt ×3.3 and of heat ×2.3 the conductive value; divergence ~1e-5 (wall rows) |
 

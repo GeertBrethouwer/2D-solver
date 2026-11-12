@@ -7,10 +7,12 @@
   ny = 65                  ! wall-normal points incl. both walls (>= 9)
   lx = 6.283185307179586   ! box length
   ly = 2.0                 ! box height: walls at y = 0 and y = ly (2 = classical channel, half-height 1)
-  grid_type = 'auto'       ! 'auto': 'tanh_top' if bc_bot = 'freeslip', else 'tanh';
+  grid_type = 'auto'       ! 'auto': 'tanh_top' if bc_bot = 'freeslip', 'tanh_bot' if bc_top = 'freeslip',
+                           !         else 'tanh';
                            ! 'tanh'     eta = tanh(alpha(xi-1/2))/tanh(alpha/2), refined at both walls;
-                           ! 'tanh_top' eta = -1 + 2 tanh(alpha xi/2)/tanh(alpha/2), refined at the top wall
-                           !            only (= upper half of the 'tanh' grid of a twice deeper channel);
+                           ! 'tanh_top' eta = -1 + 2 tanh(alpha xi/2)/tanh(alpha/2), refined at y = ly
+                           !            only (= one half of the 'tanh' grid of a twice deeper channel);
+                           ! 'tanh_bot' its mirror image, refined at y = 0 only;
                            ! 'uniform'; 'file'  (eta in [-1,1] is mapped to the walls; xi = (j-1)/(ny-1))
   grid_alpha = 2.0         ! stretching of the tanh grids
   grid_file = 'grid.in'    ! 'file': ny values of y, increasing, from the bottom to the top wall
@@ -26,10 +28,11 @@
                            ! more accurate) or the boundary row of the compact D1 ('compact': divergence
                            ! exactly zero also at the walls)
   nl_form = 'rotational'   ! 'rotational' u x omega (5 FFTs, energy conserving) or 'advective' (8 FFTs)
-  bc_bot = 'noslip'        ! bottom wall y = 0: 'noslip' (u = v = 0) or 'freeslip' (v = 0, du/dy = 0,
-                           ! e.g. an open channel or a free surface); the top wall is always no-slip.
+  bc_bot = 'noslip'        ! wall y = 0 : 'noslip' (u = v = 0) or 'freeslip' (v = 0, du/dy = 0, e.g. an
+  bc_top = 'noslip'        ! wall y = ly:  open channel or a free surface); at most one free-slip wall.
+                           ! 'bot'/'top' always mean y = 0/ly, whatever the direction of gravity.
                            ! 'freeslip' imposes d2v/dy2 = 0 (7-point one-sided with vv_neumann =
-                           ! 'explicit', first row of the compact D2 with 'compact') and dU/dy = 0
+                           ! 'explicit', first/last row of the compact D2 with 'compact') and dU/dy = 0
 /
 &time
   nstep = 1000             ! maximum number of time steps

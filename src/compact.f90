@@ -33,17 +33,19 @@ module mod_compact
   real(rp), allocatable, public :: rxi(:)          ! 1/(dy/dxi): D1m = diag(rxi) D_xi (metric first derivative)
   real(rp), public :: ew1(6),ewn(6)                ! explicit one-sided 6-point d/dy at the bottom wall
                                                    ! (points 1..6) and the top wall (points ny-5..ny)
-  real(rp), public :: ew2(7)                       ! explicit one-sided 7-point d2/dy2 at the bottom wall
-  real(rp), allocatable, public :: c21(:)          ! first row of D2 = A2^{-1} B2 (dense)
-  integer , public :: nc21                         ! effective extent of c21
+  real(rp), public :: ew2(7),ew2n(7)               ! explicit one-sided 7-point d2/dy2 at y = 0 (points 1..7)
+                                                   ! and y = ly (points ny-6..ny)
+  real(rp), allocatable, public :: c21(:),c2n(:)   ! first and last row of D2 = A2^{-1} B2 (dense)
+  integer , public :: nc21,nc2n                    ! effective extent of c21 (from y = 0), c2n (from y = ly)
 contains
   subroutine init_grid(ny,grid_type,alpha,grid_file,ybot,ytop)
     !
     ! wall-normal grid on [ybot,ytop], built as eta in [-1,1] and mapped linearly:
     !   'tanh'     : eta = tanh(alpha (xi-1/2))/tanh(alpha/2), refined at both walls
-    !   'tanh_top' : eta = -1 + 2 tanh(alpha xi/2)/tanh(alpha/2), refined at the top wall only (for a
-    !                free-slip bottom wall); it is the upper half of the 'tanh' grid of a channel twice as
+    !   'tanh_top' : eta = -1 + 2 tanh(alpha xi/2)/tanh(alpha/2), refined at the wall y = ly only (for a
+    !                free-slip wall at y = 0); it is one half of the 'tanh' grid of a channel twice as
     !                deep with 2 ny - 1 points and the same alpha
+    !   'tanh_bot' : the mirror image, refined at the wall y = 0 only (for a free-slip wall at y = ly)
     !   'uniform'
     !   'file'     : ny values of y (not eta), increasing from ybot to ytop
     ! with xi = (j-1)/(ny-1)
@@ -67,6 +69,11 @@ contains
       do j=1,ny
         xi = (j-1._rp)/(ny-1._rp)
         yg(j) = -1._rp + 2._rp*tanh(0.5_rp*alpha*xi)/tanh(0.5_rp*alpha)
+      end do
+    case('tanh_bot')
+      do j=1,ny
+        xi = (ny-j)/(ny-1._rp)
+        yg(j) = 1._rp - 2._rp*tanh(0.5_rp*alpha*xi)/tanh(0.5_rp*alpha)
       end do
     case('uniform')
       do j=1,ny
@@ -190,6 +197,22 @@ contains
       nc21 = j-1
     end do
     nc21 = max(nc21,3)
+    call fd_weights(7,yg(ny-6:ny),yg(ny),2,ew2n)
+    allocate(c2n(ny))
+    call tri_transpose_solve(ny,a2,ny,z)
+    c2n(:) = 0._rp
+    do i=1,ny
+      do l=-nbw,nbw
+        j = i+l
+        if(j >= 1 .and. j <= ny) c2n(j) = c2n(j) + z(i)*b2(l,i)
+      end do
+    end do
+    cmax = maxval(abs(c2n)); nc2n = ny
+    do j=1,ny
+      if(abs(c2n(j)) > 1.e-17_rp*cmax) exit
+      nc2n = ny-j
+    end do
+    nc2n = max(nc2n,3)
     if(order == 4) then
       kappa1 = 1.74_rp
     else

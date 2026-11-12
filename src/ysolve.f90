@@ -23,12 +23,12 @@
 !
 module mod_ysolve
   use mod_types
-  use mod_param , only: nxh,ny,lx,abort_run,vv_neumann,freeslip_bot,hgt
+  use mod_param , only: nxh,ny,lx,abort_run,vv_neumann,freeslip_bot,freeslip_top,hgt
   use mod_decomp, only: nkx,kx_lo
   use mod_compact, only: nbw,ca1 => a1,cb1 => b1,ca2 => a2,cb2 => b2,ct1w => t1w,ct1d => t1d,ct1u => t1u, &
                          ct2w => t2w,ct2d => t2d,ct2u => t2u,cc1 => c1,ccn => cn,cnc1 => nc1,cncn => ncn, &
                          cwq => wq,ckl2 => kl2,cku2 => ku2,cew1 => ew1,cewn => ewn,cew2 => ew2, &
-                         cc21 => c21,cnc21 => nc21, &
+                         cc21 => c21,cnc21 => nc21,cew2n => ew2n,cc2n => c2n,cnc2n => nc2n, &
                          cb1m => b1m,ct1mw => t1mw,ct1md => t1md,ct1mu => t1mu,crxi => rxi
   implicit none
   private
@@ -61,8 +61,8 @@ module mod_ysolve
   complex(rp), allocatable :: wa(:,:),wb(:,:)
   real(rp), allocatable :: hinv_c(:,:,:),ginv_v(:,:,:),hinv_v(:,:)
   real(rp) :: c_cached_vv(3) = -1._rp
-  real(rp), allocatable :: dw1(:),dwn(:)    ! wall functionals: dv/dy = 0 (no-slip) at both walls, or
-                                            ! d2v/dy2 = 0 at a free-slip bottom wall (dw1)
+  real(rp), allocatable :: dw1(:),dwn(:)    ! wall functionals at y = 0 (dw1) and y = ly (dwn):
+                                            ! dv/dy = 0 (no-slip) or d2v/dy2 = 0 (free-slip)
   integer :: ndw1,ndwn
 contains
   subroutine init_ysolve
@@ -280,34 +280,43 @@ contains
     call bsolve(n1,n,i,kl,ku,ca,cb,a2,b2,.true.,.true.,x,uf)
   end subroutine hsolve_ab
   !
-  subroutine hsolve_mean(n1,n,i,kl,ku,ca,cb,a2,b2,h,g,x,xh,gz,uf,c1,nc1,fsb)
+  subroutine hsolve_mean(n1,n,i,kl,ku,ca,cb,a2,b2,h,g,x,xh,gz,uf,c1,nc1,cn,ncn,fsb,fst)
     !
-    ! mean-flow solve: L x = g at interior points, x(n) = 0 at the top wall; at the bottom wall
-    ! x(1) = 0 (no-slip) or D1 x(1) = 0 (free-slip, by superposition of the solution with x(1) = 1;
-    ! D1 at the wall = first row of the compact D1). xh and gz are work columns.
+    ! mean-flow solve: L x = g at interior points; at each wall x = 0 (no-slip) or D1 x = 0
+    ! (free-slip: fsb at y = 0, fst at y = ly; at most one), by superposition of the solution
+    ! with x = 1 at that wall; D1 at the wall = first/last row of the compact D1. xh and gz are
+    ! work columns.
     !
     !$acc routine seq
     implicit none
-    integer , intent(in) :: n1,n,i,kl,ku,nc1
-    real(rp), intent(in) :: ca,cb,a2(-1:1,n),b2(-nbw:nbw,n),h(4),c1(n)
+    integer , intent(in) :: n1,n,i,kl,ku,nc1,ncn
+    real(rp), intent(in) :: ca,cb,a2(-1:1,n),b2(-nbw:nbw,n),h(4),c1(n),cn(n)
     complex(rp), intent(in) :: g(n1,n)
     complex(rp), intent(inout) :: x(n1,n),xh(n1,n),gz(n1,n)
     real(rp), intent(inout) :: uf(n1,n,0:nbw)
-    logical , intent(in) :: fsb
+    logical , intent(in) :: fsb,fst
     complex(rp) :: zero,one,s1,s2,al
     integer :: r
     zero = (0._rp,0._rp); one = (1._rp,0._rp)
     call hsolve_ab(n1,n,i,kl,ku,ca,cb,a2,b2,h,g,x,uf,zero,zero)
-    if(fsb) then
+    if(fsb .or. fst) then
       do r=1,n
         gz(i,r) = zero
       end do
-      call hsolve_ab(n1,n,i,kl,ku,ca,cb,a2,b2,h,gz,xh,uf,one,zero)
       s1 = zero; s2 = zero
-      do r=1,nc1
-        s1 = s1 + c1(r)*x(i,r)
-        s2 = s2 + c1(r)*xh(i,r)
-      end do
+      if(fsb) then
+        call hsolve_ab(n1,n,i,kl,ku,ca,cb,a2,b2,h,gz,xh,uf,one,zero)
+        do r=1,nc1
+          s1 = s1 + c1(r)*x(i,r)
+          s2 = s2 + c1(r)*xh(i,r)
+        end do
+      else
+        call hsolve_ab(n1,n,i,kl,ku,ca,cb,a2,b2,h,gz,xh,uf,zero,one)
+        do r=n-ncn+1,n
+          s1 = s1 + cn(r)*x(i,r)
+          s2 = s2 + cn(r)*xh(i,r)
+        end do
+      end if
       al = -s1/s2
       do r=1,n
         x(i,r) = x(i,r) + al*xh(i,r)
@@ -638,16 +647,24 @@ contains
       dw1(:) = c1(:); dwn(:) = cn(:)
       ndw1 = nc1; ndwn = ncn
     end if
+    !
+    ! free-slip wall: du/dy = i D2 v/kx = 0, i.e. d2v/dy2 = 0 at the wall (with v = 0), with the
+    ! 7-point one-sided derivative ('explicit') or the first/last row of the compact D2 ('compact')
+    !
     if(freeslip_bot) then
-      !
-      ! free-slip bottom wall: du/dy = i D2 v/kx = 0, i.e. d2v/dy2 = 0 at y = 0 (with v = 0), with
-      ! the 7-point one-sided derivative ('explicit') or the first row of the compact D2 ('compact')
-      !
       dw1(:) = 0._rp
       if(vv_neumann == 'explicit') then
         dw1(1:7) = cew2(:); ndw1 = 7
       else
         dw1(:) = cc21(:); ndw1 = cnc21
+      end if
+    end if
+    if(freeslip_top) then
+      dwn(:) = 0._rp
+      if(vv_neumann == 'explicit') then
+        dwn(ny-6:ny) = cew2n(:); ndwn = 7
+      else
+        dwn(:) = cc2n(:); ndwn = cnc2n
       end if
     end if
     !$acc enter data copyin(dw1,dwn)
@@ -675,8 +692,8 @@ contains
     complex(rp), intent(in)    :: v(nkx,ny)
     integer :: i,r
     real(rp) :: kx
-    logical :: fsb
-    fsb = freeslip_bot
+    logical :: fsb,fst
+    fsb = freeslip_bot; fst = freeslip_top
     !$acc parallel loop gang vector default(present) private(kx) async(1)
     do i=1,nkx
       if(.not.ismean(i)) then
@@ -685,8 +702,8 @@ contains
         do r=1,ny
           u(i,r) = cmplx(0._rp,1._rp/kx,rp)*wa(i,r)
         end do
-        if(.not.fsb) u(i,1) = (0._rp,0._rp)
-        u(i,ny) = (0._rp,0._rp)
+        if(.not.fsb) u(i,1)  = (0._rp,0._rp)
+        if(.not.fst) u(i,ny) = (0._rp,0._rp)
       end if
     end do
   end subroutine vel_from_v
@@ -808,9 +825,9 @@ contains
     integer :: i,r,l
     real(rp) :: kx,k2,ca,cb,h(4),hv(4)
     complex(rp) :: zero,d1,dn,cp,cm
-    logical :: fsb
+    logical :: fsb,fst
     zero = (0._rp,0._rp)
-    fsb = freeslip_bot
+    fsb = freeslip_bot; fst = freeslip_top
     if(c /= c_cached_vv(q)) then
       call vv_matrices(q,c)
       c_cached_vv(q) = c
@@ -825,9 +842,9 @@ contains
       end do
       if(ismean(i)) then
         !
-        ! mean flow U (kx = 0): U = 0 at the top wall; U = 0 (no-slip) or dU/dy = 0 (free-slip) at the bottom
+        ! mean flow U (kx = 0): U = 0 (no-slip) or dU/dy = 0 (free-slip) at each wall
         !
-        call hsolve_mean(nkx,ny,i,klh,kuh,ca,cb,a2,b2,h,phv,sx,wa,wb,uf,c1,nc1,fsb)
+        call hsolve_mean(nkx,ny,i,klh,kuh,ca,cb,a2,b2,h,phv,sx,wa,wb,uf,c1,nc1,cn,ncn,fsb,fst)
         do r=1,ny
           phv(i,r) = sx(i,r)
           u(i,r) = sx(i,r); v(i,r) = zero
@@ -851,7 +868,7 @@ contains
         do r=ny-ndwn+1,ny
           dn = dn + dwn(r)*wa(i,r)
         end do
-        ! wall values of phi such that D1 v = 0 at both walls (free-slip bottom: D2 v = 0 there)
+        ! wall values of phi such that D1 v = 0 at both walls (at a free-slip wall: D2 v = 0)
         cp = -(ginv_v(1,i,q)*d1 + ginv_v(3,i,q)*dn)
         cm = -(ginv_v(2,i,q)*d1 + ginv_v(4,i,q)*dn)
         call hsolve_ab(nkx,ny,i,klh,kuh,ca,cb,a2,b2,h,phv,sx,uf,cp,cm)
@@ -867,8 +884,8 @@ contains
         do r=1,ny
           u(i,r) = cmplx(0._rp,1._rp/kx,rp)*wa(i,r)
         end do
-        if(.not.fsb) u(i,1) = zero
-        u(i,ny) = zero
+        if(.not.fsb) u(i,1)  = zero
+        if(.not.fst) u(i,ny) = zero
       end if
     end do
   end subroutine vv_step
@@ -885,11 +902,11 @@ contains
     real(rp) :: ub,hb,alpha,h(4),wh
     complex(rp) :: zero
     integer :: r,l
-    logical :: fsb
+    logical :: fsb,fst
     dpdx_eff = 0._rp
     if(.not.mean_owner) return
     zero = (0._rp,0._rp)
-    fsb = freeslip_bot
+    fsb = freeslip_bot; fst = freeslip_top
     !$acc serial default(present) private(h) async(1)
     do l=1,4
       h(l) = hinv_c(l,i00,q)
@@ -897,7 +914,7 @@ contains
     do r=1,ny
       wb(i00,r) = (1._rp,0._rp)
     end do
-    call hsolve_mean(nkx,ny,i00,klh,kuh,1._rp,-c,a2,b2,h,wb,sx,wa,psi,uf,c1,nc1,fsb)
+    call hsolve_mean(nkx,ny,i00,klh,kuh,1._rp,-c,a2,b2,h,wb,sx,wa,psi,uf,c1,nc1,cn,ncn,fsb,fst)
     !$acc end serial
     ub = 0._rp; hb = 0._rp
     wh = 1._rp/hgt

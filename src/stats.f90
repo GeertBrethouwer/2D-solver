@@ -180,13 +180,15 @@ contains
     call MPI_ALLREDUCE(MPI_IN_PLACE,buf,2+2*nscal,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,ierr)
     gb = buf(1); gt = buf(2)
     if(freeslip_bot) then
-      tauw = visc*abs(gt)                         ! free-slip bottom wall: shear stress of the top wall
+      tauw = visc*abs(gt)                         ! free-slip wall y = 0: shear stress at y = ly
+    else if(freeslip_top) then
+      tauw = visc*abs(gb)                         ! free-slip wall y = ly: shear stress at y = 0
     else
       tauw = 0.5_rp*visc*(abs(gb)+abs(gt))
     end if
     ! Re_tau = u_tau delta/nu with delta = half the wall distance (closed channel) or the full
-    ! wall distance (free-slip bottom wall: open channel)
-    retau = sqrt(tauw)*merge(hgt,hhalf,freeslip_bot)/visc
+    ! wall distance (one free-slip wall: open channel)
+    retau = sqrt(tauw)*merge(hgt,hhalf,freeslip_bot.or.freeslip_top)/visc
     em = 0._rp
     if(mode_log_kx >= 0) em = mode_energy(u,v,mode_log_kx)
     if(myid == 0) then

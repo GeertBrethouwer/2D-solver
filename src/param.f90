@@ -30,9 +30,12 @@ module mod_param
   character(len=8) :: vv_neumann = 'explicit' ! wall derivative in dv/dy = 0: 'explicit' (6-point one-sided)
                                             ! or 'compact' (row of D1: divergence exactly zero at the walls)
   character(len=16) :: nl_form = 'rotational' ! 'rotational' u x omega (5 FFTs) or 'advective' (8 FFTs)
-  character(len=8) :: bc_bot = 'noslip'     ! velocity at the bottom wall y = 0: 'noslip' (u = v = 0) or
-                                            ! 'freeslip' (v = 0, du/dy = 0); the top wall is always no-slip
+  character(len=8) :: bc_bot = 'noslip'     ! velocity at the wall y = 0  : 'noslip' (u = v = 0) or
+  character(len=8) :: bc_top = 'noslip'     ! velocity at the wall y = ly : 'freeslip' (v = 0, du/dy = 0)
+                                            ! ('bot'/'top' = y = 0/ly, whatever the direction of gravity;
+                                            ! at most one free-slip wall)
   logical  :: freeslip_bot = .false.        ! derived: bc_bot == 'freeslip'
+  logical  :: freeslip_top = .false.        ! derived: bc_top == 'freeslip'
   !
   ! &time
   !
@@ -105,7 +108,7 @@ contains
     integer, intent(in) :: myid
     integer :: iunit,ios
     namelist /grid/ nx,ny,lx,ly,grid_type,grid_alpha,grid_file,fd_order,dealias
-    namelist /physics/ re,forcing,ubulk,dpdx,vv_neumann,nl_form,bc_bot
+    namelist /physics/ re,forcing,ubulk,dpdx,vv_neumann,nl_form,bc_bot,bc_top
     namelist /time/ nstep,tmax,wall_time_max,dt,fixed_dt,dt_max,dt_growth,cfl,cfl_visc
     namelist /init/ init_type,init_amp,init_seed,mode_file,mode_kx,restart_file,reset_time
     namelist /output/ data_dir,iout_log,iout_stats,iout_save_stats,iout_restart,iout_field,tstats_start, &
@@ -144,7 +147,10 @@ contains
     if(all(forcing /= ['cfr','cpg'])) call abort_run('forcing must be cfr or cpg')
     if(all(nl_form /= ['advective ','rotational'])) call abort_run('nl_form must be advective or rotational')
     if(all(bc_bot /= ['noslip  ','freeslip'])) call abort_run("bc_bot must be 'noslip' or 'freeslip'")
+    if(all(bc_top /= ['noslip  ','freeslip'])) call abort_run("bc_top must be 'noslip' or 'freeslip'")
     freeslip_bot = (bc_bot == 'freeslip')
+    freeslip_top = (bc_top == 'freeslip')
+    if(freeslip_bot .and. freeslip_top) call abort_run('at most one wall can be free-slip (bc_bot, bc_top)')
     if(all(scal_form /= ['advective ','divergence','skew      '])) &
       call abort_run("scal_form must be 'advective', 'divergence' or 'skew'")
     if(ly <= 0._rp) call abort_run('ly (box height) must be > 0')
@@ -152,13 +158,15 @@ contains
     hgt = ytop-ybot; ymid = 0.5_rp*(ybot+ytop); hhalf = 0.5_rp*hgt
     if(trim(grid_type) == 'auto') then
       if(freeslip_bot) then
-        grid_type = 'tanh_top'
+        grid_type = 'tanh_top'               ! refined at the no-slip wall y = ly only
+      else if(freeslip_top) then
+        grid_type = 'tanh_bot'               ! refined at the no-slip wall y = 0 only
       else
         grid_type = 'tanh'
       end if
     end if
-    if(all(grid_type /= [character(len=16) :: 'tanh','tanh_top','uniform','file'])) &
-      call abort_run("grid_type must be 'auto', 'tanh', 'tanh_top', 'uniform' or 'file'")
+    if(all(grid_type /= [character(len=16) :: 'tanh','tanh_top','tanh_bot','uniform','file'])) &
+      call abort_run("grid_type must be 'auto', 'tanh', 'tanh_top', 'tanh_bot', 'uniform' or 'file'")
     nxh = nx/2
     if(dealias) then
       mx = 3*nx/2
@@ -197,7 +205,8 @@ contains
       write(*,f1) 'Navier-Stokes solver','velocity-vorticity (phi = lap v), implicit viscous (SMR RK3)'
       write(*,f1) 'nonlinear term',trim(nl_form)
       write(*,f1) 'wall derivative in dv/dy = 0',trim(vv_neumann)
-      write(*,f1) 'bottom wall (y = 0)',merge('free-slip (v = 0, du/dy = 0)','no-slip                     ',freeslip_bot)
+      write(*,f1) 'wall y = 0',merge('free-slip (v = 0, du/dy = 0)','no-slip                     ',freeslip_bot)
+      write(*,f1) 'wall y = ly',merge('free-slip (v = 0, du/dy = 0)','no-slip                     ',freeslip_top)
       if(fixed_dt) then
         write(*,fr) 'fixed time step dt',dt
       else

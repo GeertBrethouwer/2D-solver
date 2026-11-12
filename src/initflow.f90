@@ -55,12 +55,12 @@ contains
     u(:,:) = 0; v(:,:) = 0; s(:,:,:) = 0
     !
     ! laminar profile in the mean mode: Poiseuille U = Umax (1 - eta^2), eta = (y-ymid)/(h/2), or with a
-    ! free-slip bottom wall the open-channel profile U = Umax (1 - zeta^2), zeta = (y-ybot)/h
-    ! (dU/dy = 0 at the bottom, U = 0 at the top); both have U_bulk = 2/3 Umax (h = wall distance)
+    ! free-slip wall the open-channel profile U = Umax (1 - zeta^2), zeta = distance from the free-slip
+    ! wall / h (dU/dy = 0 there, U = 0 at the no-slip wall); both have U_bulk = 2/3 Umax (h = ly)
     !
     if(forcing == 'cfr') then
       ulam = 1.5_rp*ubulk
-    else if(freeslip_bot) then
+    else if(freeslip_bot .or. freeslip_top) then
       ulam = 0.5_rp*dpdx*re*hgt**2
     else
       ulam = 0.5_rp*dpdx*re*hhalf**2
@@ -69,6 +69,8 @@ contains
       do k=1,ny
         if(freeslip_bot) then
           u(1,k) = ulam*(1._rp-((yg(k)-ybot)/hgt)**2)
+        else if(freeslip_top) then
+          u(1,k) = ulam*(1._rp-((ytop-yg(k))/hgt)**2)
         else
           u(1,k) = ulam*(1._rp-((yg(k)-ymid)/hhalf)**2)
         end if
