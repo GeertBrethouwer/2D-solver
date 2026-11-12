@@ -16,8 +16,10 @@
 The ice occupies $y<0$ and the water $0<y<L_y$; the ice--water interface is the wall $y=0$ (in
 \texttt{solver2d}: \texttt{bc\_bot = 'noslip'}, \texttt{bc\_top = 'freeslip'}, gravity along $+y$).
 The unit normal $\mathbf{n}=\mathbf{e}_y$ points from the interface into the water. The subscript $b$
-denotes values at the interface ($y=0$). The melt rate $m$ is the speed at which the interface
-recedes into the ice (in m\,s$^{-1}$ of ice), positive for melting.
+denotes values at the interface ($y=0$). The melt (ablation) rate $m$ is the speed at which the
+interface recedes into the ice (in m\,s$^{-1}$ of ice), positive for melting. The effect of pressure
+on the freezing point is neglected throughout (it would add a term $\lambda_3 p_b$, with
+$\lambda_3\approx -7.5\times10^{-4}$\,$^\circ$C\,dbar$^{-1}$, to \eqref{eq:liquidus}).
 
 \begin{center}
 \begin{tabular}{lll}
@@ -27,10 +29,8 @@ symbol & meaning & typical value \\
 $T,\ S$ & water temperature, salinity & \\
 $T_b,\ S_b$ & temperature and salinity at the interface & unknown \\
 $m$ & melt rate (ice thickness per unit time) & unknown \\
-$p_b$ & pressure at the interface & \\
 $\lambda_1$ & liquidus slope & $\approx -5.7\times10^{-2}$ $^\circ$C\,psu$^{-1}$ \\
 $\lambda_2$ & liquidus offset & $\approx 8.3\times10^{-2}$ $^\circ$C \\
-$\lambda_3$ & pressure coefficient of the freezing point & $\approx -7.5\times10^{-4}$ $^\circ$C\,dbar$^{-1}$ \\
 $L_f$ & latent heat of fusion & $3.34\times10^{5}$ J\,kg$^{-1}$ \\
 $c_w,\ c_i$ & specific heat of water, ice & $\approx 3974$, $2009$ J\,kg$^{-1}$K$^{-1}$ \\
 $\rho_w,\ \rho_i$ & density of water, ice & $\approx 1028$, $917$ kg\,m$^{-3}$ \\
@@ -49,7 +49,7 @@ properties, against the source you use.
 
 \paragraph{1. Freezing point (liquidus).} The interface is at the local freezing temperature:
 \begin{equation}
-  T_b = \lambda_1 S_b + \lambda_2 + \lambda_3\, p_b . \label{eq:liquidus}
+  T_b = \lambda_1 S_b + \lambda_2 . \label{eq:liquidus}
 \end{equation}
 
 \paragraph{2. Heat balance.} The heat conducted from the water to the interface melts ice and is
@@ -80,21 +80,32 @@ $\rho_w \kappa_S\, \partial S/\partial y|_b$. This holds for the set-up above: i
 $y>0$, gravity along $+y$ (the ice is physically on top). If instead the ice is at $y=L_y$ (water at
 $y<L_y$, normal $-\mathbf{e}_y$), replace $\partial/\partial y$ by $-\partial/\partial y$.
 
-\paragraph{Moving interface.} The interface recedes into the ice at speed $m$. Mass conservation
-across the interface, $\rho_i\, m = \rho_w\,(m + v_b)$ in the frame of the interface, gives the water
-velocity at the interface (in the frame of the ice)
+\paragraph{Wall-normal velocity at the interface.} As in Wells \& Worster (2011), we use the
+reference frame in which the interface is fixed at $y=0$ (it is quasi-planar and recedes slowly). In
+this frame the ice moves towards the interface at speed $m$, and melts there. Mass conservation across
+the interface, $\rho_i\, m = \rho_w\, v(0)$, gives the boundary condition
 \begin{equation}
-  v_b = \left(\frac{\rho_i}{\rho_w} - 1\right) m ,
+  v(0) = \frac{\rho_i}{\rho_w}\, m \;>\; 0 , \qquad u(0) = 0 . \label{eq:v0}
 \end{equation}
-which is negative: since ice is less dense than water, melting contracts the volume and the water
-moves towards the ice. Both are many orders of
-magnitude slower than the flow, so most simulations keep the interface fixed and impermeable
-(quasi-steady approximation), as assumed below.
+The velocity at the interface is positive: meltwater flows from the interface into the water. It is
+the ablation rate times $\rho_i/\rho_w$ ($\approx 0.89$ for sea water, $\approx 0.92$ for fresh
+water), i.e.\ it equals the volume flux of meltwater per unit area. It combines the advection of the
+water past the receding interface and the expansion of the ice on melting. This is condition (3.5a)
+of Wells \& Worster (2011), $v=-(\rho_s/\rho_l)\,\dot a$ with $\dot a=-m$. (In the frame of the ice
+the water velocity at the interface is $v(0)-m = (\rho_i/\rho_w-1)\,m<0$: the volume contracts on
+melting.)
+
+The interface is therefore \emph{not} impermeable. The heat and salt balances \eqref{eq:heat} and
+\eqref{eq:salt} nevertheless contain only the diffusive fluxes on the water side, in either frame. In
+the interface-fixed frame the salt balance reads
+$\rho_i\, m\, S_i = \rho_w v(0)\, S_b - \rho_w \kappa_S\, \partial S/\partial y|_b$ (salt carried in by
+the ice $=$ salt carried away by advection and diffusion); with \eqref{eq:v0} this is exactly
+\eqref{eq:salt}. The same holds for heat.
 
 \section{Special cases}
 
 \paragraph{Stefan condition (fresh water).} Without salt, \eqref{eq:salt} drops out and
-\eqref{eq:liquidus} becomes $T_b = T_m(p_b)$ (0\,$^\circ$C at atmospheric pressure):
+\eqref{eq:liquidus} becomes $T_b = T_m$ (0\,$^\circ$C):
 \begin{equation}
   T_b = T_m, \qquad
   \rho_i L_f\, m = \rho_w c_w \kappa_T \left.\frac{\partial T}{\partial y}\right|_b
@@ -114,7 +125,7 @@ and with $S_i=0$, eliminating $m$ and $T_b$ gives a quadratic for $S_b$:
   a\, S_b^2 + b\, S_b + c = 0, \qquad
   \begin{aligned}
     a &= c_w \gamma_T \lambda_1, \\
-    b &= -\left[c_w \gamma_T (T_w - \lambda_2 - \lambda_3 p_b) + L_f \gamma_S\right], \\
+    b &= -\left[c_w \gamma_T (T_w - \lambda_2) + L_f \gamma_S\right], \\
     c &= L_f \gamma_S\, S_w ,
   \end{aligned}
   \label{eq:quadratic}
@@ -145,7 +156,7 @@ With $y$ in units of $\ell$, equations \eqref{eq:liquidus}--\eqref{eq:salt} beco
 \begin{align}
   \theta_b &= \Lambda\, s_b + \theta_{f}, &
   \Lambda &= \frac{\lambda_1 \Delta S}{\Delta T}, \quad
-  \theta_f = \frac{\lambda_1 S_{\mathrm{ref}} + \lambda_2 + \lambda_3 p_b - T_{\mathrm{ref}}}{\Delta T},
+  \theta_f = \frac{\lambda_1 S_{\mathrm{ref}} + \lambda_2 - T_{\mathrm{ref}}}{\Delta T},
   \label{eq:nd-liquidus}\\[0.4em]
   m^* &= St \left( \frac{1}{Re\,Pr} \left.\frac{\partial \theta}{\partial y}\right|_b - q_i \right), &
   St &= \frac{c_w \Delta T}{L_f},
@@ -161,6 +172,12 @@ with the Stefan number $St$ and the non-dimensional conduction into the ice
 \end{equation}
 Equation \eqref{eq:nd-salt} uses $S_b - S_i = \Delta S\,(s_b + \sigma)$. If $S_{\mathrm{ref}}$ is
 chosen as the ice salinity ($S_{\mathrm{ref}} = S_i$, e.g.\ $0$), then $\sigma = 0$.
+
+The non-dimensional melt rate is exactly the non-dimensional wall-normal velocity at the interface,
+\eqref{eq:v0}:
+\begin{equation}
+  \frac{v(0)}{U} = m^* > 0 .
+\end{equation}
 
 The new non-dimensional parameters are $St$, $\Lambda$, $\theta_f$, $\sigma$ (and $q_i$). In
 \texttt{solver2d} the buoyancy enters through the Richardson numbers \texttt{ri(1)}, \texttt{ri(2)}
@@ -181,8 +198,65 @@ The conditions hold at every point $x$ of the interface and are nonlinear ($m^* 
         the mean mode only, so this needs per-mode wall values.
   \item Lag the condition by one substep, or iterate it within the substep; the interface values
         change slowly compared with the flow.
+  \item Impose the wall-normal velocity $v(0,x) = m^*(x)$, $u(0,x)=0$ (instead of $u=v=0$). In the
+        velocity--vorticity solver this is an inhomogeneous Dirichlet value of $v$ at the wall,
+        handled by the same superposition as the other wall conditions.
+  \item Mass conservation: in 2D the mean ($k_x=0$) part of continuity gives $\partial \bar v/\partial y=0$,
+        so the mean blowing velocity $\bar v = \overline{m^*}$ is the same at every $y$. The wall
+        $y=L_y$ must then let this flux out ($\bar v(L_y)=\overline{m^*}$, an outflow) instead of
+        being impermeable; at present \texttt{solver2d} has $\bar v\equiv 0$. Equivalently, the
+        whole water column moves away from the ice at $\overline{m^*}$, as the far field does in
+        the frame of the interface.
   \item Output the melt rate $m^*(x,t)$ and its average.
 \end{enumerate}
+
+\section{Comparison with Wells \& Worster (2011)}
+
+Wells \& Worster (2011) write the interface as $y=a(t)$, with the solid at $y<a$ and the liquid at
+$y>a$, so that $\dot a=\partial a/\partial t<0$ for ablation; subscripts $s$ (solid) and $l$ (liquid),
+solute concentration $C$ and solutal diffusivity $D$. With pressure neglected, their interface
+conditions are identical to \eqref{eq:liquidus}--\eqref{eq:v0} under the correspondence
+\begin{gather*}
+  \dot a = -m,\qquad \rho_s=\rho_i,\qquad \rho_l=\rho_w,\qquad c_l=c_w,\qquad \kappa_l=\kappa_T,\\
+  D=\kappa_S,\qquad C=S,\qquad C_s=S_i,\qquad T_i^{\mathrm{WW}}=T_b,\qquad C_i=S_b .
+\end{gather*}
+
+\begin{center}
+\small
+\begin{tabular}{l p{7.6cm} p{5.2cm}}
+\toprule
+ & Wells \& Worster (2011) & this document \\
+\midrule
+liquidus & $T_i = T_m - \Gamma\,(C_i - C_s)$ \hfill (2.1) & $T_b = \lambda_1 S_b + \lambda_2$:
+  \ $\lambda_1=-\Gamma$, $\lambda_2 = T_m + \Gamma C_s$ \\[0.3em]
+heat & $\rho_s L \dot a = \rho_s c_s \kappa_s T_y|_{a^-} - \rho_l c_l \kappa_l T_y|_{a^+}$ \hfill (2.2)
+  & \eqref{eq:heat} with $\dot a=-m$ \\[0.3em]
+salt & $\rho_s (C_i - C_s)\,\dot a = -\rho_l D\, C_y|_{a^+}$ \hfill (2.3) & \eqref{eq:salt} with $\dot a=-m$ \\[0.3em]
+velocity & $v(0) = -(\rho_s/\rho_l)\,\dot a$ \hfill (3.5a) & \eqref{eq:v0}: $v(0)=(\rho_i/\rho_w)\,m$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Remarks:
+\begin{itemize}
+  \item Liquidus: Wells \& Worster use $T_m = 0$\,$^\circ$C and $\Gamma \approx 0.06$\,$^\circ$C\,psu$^{-1}$
+        with $C_s\approx 0$, i.e.\ $\lambda_1\approx -0.06$\,$^\circ$C\,psu$^{-1}$ and $\lambda_2 = 0$.
+        Holland \& Jenkins (1999) fit $\lambda_1\approx-0.057$\,$^\circ$C\,psu$^{-1}$ and
+        $\lambda_2\approx 0.083$\,$^\circ$C over the oceanic salinity range; the difference in $T_b$ is
+        below $0.1$\,$^\circ$C.
+  \item Heat: Wells \& Worster show (their appendix) that the conductive heat flux into the solid is
+        typically small and neglect it, i.e.\ $q_i=0$ in \eqref{eq:nd-heat}.
+  \item Velocity: in the interface-fixed frame the wall-normal velocity at $y=0$ equals the meltwater
+        volume flux $(\rho_i/\rho_w)\,m$ and is positive (directed into the water). It equals the
+        ablation rate $m$ itself only if $\rho_i=\rho_w$.
+  \item Their ablation rate, (3.15), $\dot a = -(\rho_l/\rho_s)\,v(0)$, is \eqref{eq:v0} solved for $m$.
+        They also note that the fluid flow, and $v(0)$ itself, do not depend on $\rho_s/\rho_l$; only the
+        conversion from $v(0)$ to the ablation rate does. This agrees with \eqref{eq:nd-heat}, which
+        determines $m^* = v(0)/U$ without $\rho_i/\rho_w$.
+  \item Buoyancy: Wells \& Worster keep only the compositional (salt) buoyancy,
+        $\rho=\rho_\infty+\rho_l\beta(C-C_\infty)$; \texttt{solver2d} has both, through \texttt{ri(1)}
+        and \texttt{ri(2)} (set \texttt{ri(1)} $=0$ to reproduce their assumption).
+\end{itemize}
 
 \section*{References}
 \begin{itemize}
@@ -190,6 +264,8 @@ The conditions hold at every point $x$ of the interface and are nonlinear ($m^* 
         under an ice shelf, \emph{Antarctic Science} 1 (1989) 325--336.
   \item D.~M. Holland and A. Jenkins, Modeling thermodynamic ice--ocean interactions at the base of an
         ice shelf, \emph{J. Phys. Oceanogr.} 29 (1999) 1787--1800.
+  \item A.~J. Wells and M.~G. Worster, Melting and dissolving of a vertical solid surface with laminar
+        compositional convection, \emph{J. Fluid Mech.} 687 (2011) 118--140.
 \end{itemize}
 
 \end{document}
