@@ -38,7 +38,7 @@ contains
       am(q) = hash01(mx_,0,comp,seed+10*q) - 0.5_rp
       ph(q) = 2*pi*hash01(mx_,0,comp,seed+10*q+5)
     end do
-    y = yg(k)
+    y = (yg(k)-ymid)/hhalf                       ! in [-1,1]
     rnd_profile = (1._rp-y*y)*(am(1)*exp(cmplx(0._rp,ph(1),rp)) + am(2)*y*exp(cmplx(0._rp,ph(2),rp)) + &
                                am(3)*(2*y*y-1._rp)*exp(cmplx(0._rp,ph(3),rp)))
   end function rnd_profile
@@ -54,23 +54,23 @@ contains
     complex(rp), allocatable :: mode(:)
     u(:,:) = 0; v(:,:) = 0; s(:,:,:) = 0
     !
-    ! laminar profile in the mean mode: Poiseuille, or with a free-slip bottom wall the open-channel
-    ! profile U = Umax (1 - eta^2), eta = (y+1)/2 (dU/dy = 0 at y = -1, U = 0 at y = 1);
-    ! both have U_bulk = 2/3 Umax
+    ! laminar profile in the mean mode: Poiseuille U = Umax (1 - eta^2), eta = (y-ymid)/(h/2), or with a
+    ! free-slip bottom wall the open-channel profile U = Umax (1 - zeta^2), zeta = (y-ybot)/h
+    ! (dU/dy = 0 at the bottom, U = 0 at the top); both have U_bulk = 2/3 Umax (h = wall distance)
     !
     if(forcing == 'cfr') then
       ulam = 1.5_rp*ubulk
     else if(freeslip_bot) then
-      ulam = 2._rp*dpdx*re
+      ulam = 0.5_rp*dpdx*re*hgt**2
     else
-      ulam = 0.5_rp*dpdx*re
+      ulam = 0.5_rp*dpdx*re*hhalf**2
     end if
     if(kx_lo == 1) then
       do k=1,ny
         if(freeslip_bot) then
-          u(1,k) = ulam*(1._rp-(0.5_rp*(yg(k)+1._rp))**2)
+          u(1,k) = ulam*(1._rp-((yg(k)-ybot)/hgt)**2)
         else
-          u(1,k) = ulam*(1._rp-yg(k)**2)
+          u(1,k) = ulam*(1._rp-((yg(k)-ymid)/hhalf)**2)
         end if
       end do
     end if
@@ -87,7 +87,7 @@ contains
         mxx = kx_lo+i-2
         if(mxx < 1 .or. mxx > mmax) cycle
         do k=2,ny-1
-          y = yg(k)
+          y = (yg(k)-ymid)/hhalf
           v(i,k) = (1._rp-y*y)*rnd_profile(mxx,k,2,init_seed)/(1._rp+0.2_rp*mxx)
         end do
       end do
@@ -120,7 +120,7 @@ contains
     do n=1,nscal
       if(kx_lo == 1) then
         do k=1,ny
-          y = yg(k)
+          y = (yg(k)-ymid)/hhalf
           select case(trim(sinit(n)))
           case('linear','noise')
             if(sbc_bot(n) == 'D' .and. sbc_top(n) == 'D') then
@@ -174,7 +174,7 @@ contains
       do i=1,nkx
         wt = 2._rp
         if(kx_lo+i-1 == 1) wt = 0._rp
-        e = e + 0.5_rp*wq(k)*wt*(abs(u(i,k))**2+abs(v(i,k))**2)/2._rp
+        e = e + wq(k)*wt*(abs(u(i,k))**2+abs(v(i,k))**2)/(2._rp*hgt)
       end do
     end do
     call MPI_ALLREDUCE(MPI_IN_PLACE,e,1,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,ierr)

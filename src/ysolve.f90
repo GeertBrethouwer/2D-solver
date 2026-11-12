@@ -23,7 +23,7 @@
 !
 module mod_ysolve
   use mod_types
-  use mod_param , only: nxh,ny,lx,abort_run,vv_neumann,freeslip_bot
+  use mod_param , only: nxh,ny,lx,abort_run,vv_neumann,freeslip_bot,hgt
   use mod_decomp, only: nkx,kx_lo
   use mod_compact, only: nbw,ca1 => a1,cb1 => b1,ca2 => a2,cb2 => b2,ct1w => t1w,ct1d => t1d,ct1u => t1u, &
                          ct2w => t2w,ct2d => t2d,ct2u => t2u,cc1 => c1,ccn => cn,cnc1 => nc1,cncn => ncn, &
@@ -882,7 +882,7 @@ contains
     real(rp), intent(in) :: ub_target,coef,c
     integer , intent(in) :: q
     real(rp), intent(out) :: dpdx_eff
-    real(rp) :: ub,hb,alpha,h(4)
+    real(rp) :: ub,hb,alpha,h(4),wh
     complex(rp) :: zero
     integer :: r,l
     logical :: fsb
@@ -900,10 +900,11 @@ contains
     call hsolve_mean(nkx,ny,i00,klh,kuh,1._rp,-c,a2,b2,h,wb,sx,wa,psi,uf,c1,nc1,fsb)
     !$acc end serial
     ub = 0._rp; hb = 0._rp
+    wh = 1._rp/hgt
     !$acc parallel loop default(present) reduction(+:ub,hb) async(1)
     do r=1,ny
-      ub = ub + 0.5_rp*wq(r)*real(u(i00,r),rp)
-      hb = hb + 0.5_rp*wq(r)*real(sx(i00,r),rp)
+      ub = ub + wh*wq(r)*real(u(i00,r),rp)
+      hb = hb + wh*wq(r)*real(sx(i00,r),rp)
     end do
     !$acc wait(1)
     alpha = (ub_target - ub)/hb

@@ -170,8 +170,8 @@ contains
     call profile_mean(u,1._rp,um)
     call correlation(u,u,1._rp,uu)
     call correlation(v,v,1._rp,vv)
-    ub = 0.5_rp*sum(wq(:)*um(:))
-    ekin = 0.25_rp*sum(wq(:)*(uu(:)+vv(:)))
+    ub = sum(wq(:)*um(:))/hgt
+    ekin = 0.5_rp*sum(wq(:)*(uu(:)+vv(:)))/hgt
     buf(:) = 0._rp
     call wall_gradient(u,buf(1),buf(2))
     do n=1,nscal
@@ -184,7 +184,9 @@ contains
     else
       tauw = 0.5_rp*visc*(abs(gb)+abs(gt))
     end if
-    retau = sqrt(tauw)/visc
+    ! Re_tau = u_tau delta/nu with delta = half the wall distance (closed channel) or the full
+    ! wall distance (free-slip bottom wall: open channel)
+    retau = sqrt(tauw)*merge(hgt,hhalf,freeslip_bot)/visc
     em = 0._rp
     if(mode_log_kx >= 0) em = mode_energy(u,v,mode_log_kx)
     if(myid == 0) then

@@ -11,9 +11,12 @@ module mod_param
   ! &grid
   !
   integer  :: nx = 64, ny = 65              ! Fourier modes in x (even), points in y (walls included)
-  real(rp) :: lx = 2*pi                     ! box length, the channel half-height is 1 (y in [-1,1])
-  character(len=16)  :: grid_type = 'tanh'  ! 'tanh', 'uniform' or 'file'
-  real(rp) :: grid_alpha = 2._rp            ! stretching parameter alpha_s (tanh grid)
+  real(rp) :: lx = 2*pi                     ! box length
+  real(rp) :: ly = 0._rp                    ! > 0: wall-normal domain y in [0,ly]; 0 (default): y in [-1,1]
+  character(len=16)  :: grid_type = 'auto'  ! 'auto': 'tanh_top' with a free-slip bottom wall, else 'tanh';
+                                            ! 'tanh' (refined at both walls), 'tanh_top' (refined at the top
+                                            ! wall only), 'uniform' or 'file'
+  real(rp) :: grid_alpha = 2._rp            ! stretching parameter alpha_s (tanh grids)
   character(len=256) :: grid_file = 'grid.in'
   integer  :: fd_order = 6                  ! 4 -> (3-4-3), 6 -> (3-5-6-5-3) compact schemes
   logical  :: dealias = .true.              ! 3/2 rule in x
@@ -80,6 +83,9 @@ module mod_param
   ! derived quantities
   !
   integer  :: nxh, mx                      ! number of kx modes kept; physical (dealiased) grid size
+  real(rp) :: ybot = -1._rp, ytop = 1._rp  ! wall positions
+  real(rp) :: hgt = 2._rp                  ! wall distance ytop - ybot
+  real(rp) :: ymid = 0._rp, hhalf = 1._rp  ! centre and half of the wall distance
   real(rp) :: visc
   real(rp) :: diff(nscal_max)
   real(rp) :: gvec(2) = 0._rp              ! unit vector in the direction of gravity
@@ -98,7 +104,7 @@ contains
     implicit none
     integer, intent(in) :: myid
     integer :: iunit,ios
-    namelist /grid/ nx,ny,lx,grid_type,grid_alpha,grid_file,fd_order,dealias
+    namelist /grid/ nx,ny,lx,ly,grid_type,grid_alpha,grid_file,fd_order,dealias
     namelist /physics/ re,forcing,ubulk,dpdx,vv_neumann,nl_form,bc_bot
     namelist /time/ nstep,tmax,wall_time_max,dt,fixed_dt,dt_max,dt_growth,cfl,cfl_visc
     namelist /init/ init_type,init_amp,init_seed,mode_file,mode_kx,restart_file,reset_time
@@ -141,6 +147,20 @@ contains
     freeslip_bot = (bc_bot == 'freeslip')
     if(all(scal_form /= ['advective ','divergence','skew      '])) &
       call abort_run("scal_form must be 'advective', 'divergence' or 'skew'")
+    if(ly < 0._rp) call abort_run('ly must be > 0 (or 0 for y in [-1,1])')
+    if(ly > 0._rp) then
+      ybot = 0._rp; ytop = ly
+    end if
+    hgt = ytop-ybot; ymid = 0.5_rp*(ybot+ytop); hhalf = 0.5_rp*hgt
+    if(trim(grid_type) == 'auto') then
+      if(freeslip_bot) then
+        grid_type = 'tanh_top'
+      else
+        grid_type = 'tanh'
+      end if
+    end if
+    if(all(grid_type /= [character(len=16) :: 'tanh','tanh_top','uniform','file'])) &
+      call abort_run("grid_type must be 'auto', 'tanh', 'tanh_top', 'uniform' or 'file'")
     nxh = nx/2
     if(dealias) then
       mx = 3*nx/2
@@ -164,9 +184,10 @@ contains
       character(len=*), parameter :: f1 = '(1x,a,t36,a)', fi = '(1x,a,t36,3(i0,:,1x))', fr = '(1x,a,t36,4(es12.5,:,1x))'
       write(*,'(a)') ' ============================== solver2d run set-up ==============================='
       write(*,fi) 'Fourier modes nx / points ny',nx,ny
-      write(*,fr) 'box length lx (half-height h = 1)',lx
+      write(*,fr) 'box length lx',lx
+      write(*,fr) 'walls at y = ',ybot,ytop
       write(*,f1) 'wall-normal grid',trim(grid_type)
-      if(trim(grid_type) == 'tanh') write(*,fr) '  stretching alpha_s',grid_alpha
+      if(grid_type(1:4) == 'tanh') write(*,fr) '  stretching alpha_s',grid_alpha
       write(*,fi) 'compact scheme order',fd_order
       write(*,f1) '3/2 dealiasing',merge('yes','no ',dealias)
       write(*,fr) 'Reynolds number re',re

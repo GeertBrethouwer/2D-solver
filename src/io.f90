@@ -50,9 +50,9 @@ contains
     call MPI_TYPE_FREE(dtype,ierr)
     if(myid == 0) then
       open(newunit=iunit,file=trim(fname)//'.hdr',status='replace',action='write')
-      write(iunit,'(a)') '# nx ny nscal / lx / time istep dt / grid_type grid_alpha fd_order'
+      write(iunit,'(a)') '# nx ny nscal / lx ybot ytop / time istep dt / grid_type grid_alpha fd_order'
       write(iunit,*) nx,ny,nscal
-      write(iunit,*) lx
+      write(iunit,*) lx,ybot,ytop
       write(iunit,*) time,istep,dtcur
       write(iunit,*) trim(grid_type),grid_alpha,fd_order
       close(iunit)
@@ -75,16 +75,24 @@ contains
     complex(rp), intent(inout), contiguous :: s(:,:,:)
     integer :: fh,dtype,ierr,n,iunit,ios,nxr,nyr,nsr
     integer(MPI_OFFSET_KIND) :: disp,fsize
-    real(rp) :: lxr
+    real(rp) :: lxr,ybr,ytr
+    character(len=512) :: line
     open(newunit=iunit,file=trim(fname)//'.hdr',status='old',action='read',iostat=ios)
     if(ios /= 0) call abort_run('cannot open restart header '//trim(fname)//'.hdr')
     read(iunit,*)
     read(iunit,*) nxr,nyr,nsr
-    read(iunit,*) lxr
+    read(iunit,'(a)') line
+    read(line,*,iostat=ios) lxr,ybr,ytr
+    if(ios /= 0) then           ! older files: lx only, walls at -1 and 1
+      read(line,*) lxr
+      ybr = -1._rp; ytr = 1._rp
+    end if
     read(iunit,*) time,istep,dtcur
     close(iunit)
     if(nxr /= nx .or. nyr /= ny) call abort_run('restart file has a different resolution')
     if(abs(lxr-lx) > 1.e-10_rp*lx) call abort_run('restart file has a different box length')
+    if(abs(ybr-ybot) > 1.e-10_rp*hgt .or. abs(ytr-ytop) > 1.e-10_rp*hgt) &
+      call abort_run('restart file has different wall positions (ly)')
     call spec_subarray(dtype)
     call MPI_FILE_OPEN(MPI_COMM_WORLD,trim(fname)//'.bin',MPI_MODE_RDONLY,MPI_INFO_NULL,fh,ierr)
     if(ierr /= MPI_SUCCESS) call abort_run('cannot open '//trim(fname)//'.bin')

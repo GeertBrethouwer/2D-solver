@@ -35,7 +35,7 @@ program solver2d
   call MPI_COMM_RANK(MPI_COMM_WORLD,myid,ierr)
   call read_input(myid)
   call init_decomp
-  call init_grid(ny,grid_type,grid_alpha,grid_file)
+  call init_grid(ny,grid_type,grid_alpha,grid_file,ybot,ytop)
   call init_compact(ny,fd_order)
   call alloc_fields
   call init_fft(up)
@@ -48,12 +48,12 @@ program solver2d
     write(*,'(a)')        ' --------------------------------------------------------------'
     write(*,'(a,2i6)')    ' Fourier modes nx / points ny     : ',nx,ny
     write(*,'(a,i6)')     ' physical (dealiased) grid mx     : ',mx
-    write(*,'(a,es12.4)') ' min. wall-normal spacing         : ',yg(2)-yg(1)
+    write(*,'(a,2es12.4)')' wall-normal spacing at the walls : ',yg(2)-yg(1),yg(ny)-yg(ny-1)
     write(*,'(a,es12.4)') ' max. wall-normal spacing         : ',maxval(yg(2:ny)-yg(1:ny-1))
     write(*,'(a,i3,a,4i3)') ' compact scheme order ',fd_order,', bandwidths of B1, B2: ',kl1,ku1,kl2,ku2
     write(*,'(a,2i6)')    ' extent of the dense rows of D1   : ',nc1,ncn
     write(*,'(a,es12.4)') ' spectral radius of D2            : ',lam2max
-    write(*,'(a,es12.4)') ' sum of quadrature weights - 2    : ',sum(wq)-2._rp
+    write(*,'(a,es12.4)') ' sum of quadrature weights - ly   : ',sum(wq)-hgt
     write(*,'(a)')        ' --------------------------------------------------------------'
   end if
   call MPI_BARRIER(MPI_COMM_WORLD,ierr)

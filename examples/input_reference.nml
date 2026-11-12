@@ -1,14 +1,19 @@
 !======================================================================================================
 !  solver2d: every input item with its default value. Copy as input.nml and edit.
-!  Units: half-height h = 1 (y in [-1,1]), velocity U_ref, time h/U_ref; re = U_ref h/nu.
+!  Units: length L (y in [-1,1], or [0,ly] with ly > 0), velocity U_ref, time L/U_ref; re = U_ref L/nu.
 !======================================================================================================
 &grid
   nx = 64                  ! Fourier modes in x (even); kx = 0..nx/2-1 are kept (Nyquist dropped)
   ny = 65                  ! wall-normal points incl. both walls (>= 9)
   lx = 6.283185307179586   ! box length
-  grid_type = 'tanh'       ! 'tanh' (y = tanh(alpha(xi-1/2))/tanh(alpha/2)), 'uniform', 'file'
-  grid_alpha = 2.0         ! stretching of the tanh grid
-  grid_file = 'grid.in'    ! 'file': ny values of y, increasing, from -1 to 1
+  ly = 0.0                 ! 0: walls at y = -1 and 1; > 0: walls at y = 0 and y = ly
+  grid_type = 'auto'       ! 'auto': 'tanh_top' if bc_bot = 'freeslip', else 'tanh';
+                           ! 'tanh'     eta = tanh(alpha(xi-1/2))/tanh(alpha/2), refined at both walls;
+                           ! 'tanh_top' eta = -1 + 2 tanh(alpha xi/2)/tanh(alpha/2), refined at the top wall
+                           !            only (= upper half of the 'tanh' grid of a twice deeper channel);
+                           ! 'uniform'; 'file'  (eta in [-1,1] is mapped to the walls; xi = (j-1)/(ny-1))
+  grid_alpha = 2.0         ! stretching of the tanh grids
+  grid_file = 'grid.in'    ! 'file': ny values of y, increasing, from the bottom to the top wall
   fd_order = 6             ! 4 -> (3-4-3), 6 -> (3-5-6-5-3) compact schemes
   dealias = .true.         ! 3/2 rule in x (physical grid mx = 3 nx/2)
 /

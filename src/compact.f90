@@ -16,14 +16,14 @@ module mod_compact
   private
   public :: init_grid,init_compact,mat_band_apply
   integer, parameter, public :: nbw = 3        ! max. half-bandwidth of B1/B2
-  real(rp), allocatable, public :: yg(:)       ! grid points y(1:ny), y(1) = -1, y(ny) = 1
+  real(rp), allocatable, public :: yg(:)       ! grid points y(1:ny), y(1) = ybot, y(ny) = ytop
   real(rp), allocatable, public :: a1(:,:),a2(:,:) ! (-1:1   ,ny)
   real(rp), allocatable, public :: b1(:,:),b2(:,:) ! (-nbw:nbw,ny)
   real(rp), allocatable, public :: t1w(:),t1d(:),t1u(:) ! Thomas factors of A1 (multiplier, 1/pivot, super-diag.)
   real(rp), allocatable, public :: t2w(:),t2d(:),t2u(:) ! Thomas factors of A2
   real(rp), allocatable, public :: c1(:),cn(:)     ! first and last row of D1 = A1^{-1} B1 (dense)
   integer , public :: nc1,ncn                      ! effective extent of c1 (from the bottom) and cn (from the top)
-  real(rp), allocatable, public :: wq(:)           ! quadrature weights, int_{-1}^{1} f dy = sum wq*f
+  real(rp), allocatable, public :: wq(:)           ! quadrature weights, int_{ybot}^{ytop} f dy = sum wq*f
   real(rp), allocatable, public :: dyc(:)          ! local minimum grid spacing (for the CFL condition)
   integer , public :: kl1,ku1,kl2,ku2              ! actual bandwidths of B1 and B2
   real(rp), public :: lam2max                      ! spectral radius of D2 with Dirichlet BCs
@@ -37,20 +37,36 @@ module mod_compact
   real(rp), allocatable, public :: c21(:)          ! first row of D2 = A2^{-1} B2 (dense)
   integer , public :: nc21                         ! effective extent of c21
 contains
-  subroutine init_grid(ny,grid_type,alpha,grid_file)
+  subroutine init_grid(ny,grid_type,alpha,grid_file,ybot,ytop)
+    !
+    ! wall-normal grid on [ybot,ytop], built as eta in [-1,1] and mapped linearly:
+    !   'tanh'     : eta = tanh(alpha (xi-1/2))/tanh(alpha/2), refined at both walls
+    !   'tanh_top' : eta = -1 + 2 tanh(alpha xi/2)/tanh(alpha/2), refined at the top wall only (for a
+    !                free-slip bottom wall); it is the upper half of the 'tanh' grid of a channel twice as
+    !                deep with 2 ny - 1 points and the same alpha
+    !   'uniform'
+    !   'file'     : ny values of y (not eta), increasing from ybot to ytop
+    ! with xi = (j-1)/(ny-1)
+    !
     implicit none
     integer , intent(in) :: ny
     character(len=*), intent(in) :: grid_type,grid_file
-    real(rp), intent(in) :: alpha
+    real(rp), intent(in) :: alpha,ybot,ytop
     integer :: j,iunit,ios
-    real(rp) :: xi
+    real(rp) :: xi,tol
     allocate(yg(ny))
+    if(grid_type(1:min(4,len(grid_type))) == 'tanh' .and. alpha <= 0._rp) &
+      call abort_run('grid_alpha must be > 0 for a tanh grid')
     select case(trim(grid_type))
     case('tanh')
-      if(alpha <= 0._rp) call abort_run('grid_alpha must be > 0 for a tanh grid')
       do j=1,ny
         xi = (j-1._rp)/(ny-1._rp)
         yg(j) = tanh(alpha*(xi-0.5_rp))/tanh(0.5_rp*alpha)
+      end do
+    case('tanh_top')
+      do j=1,ny
+        xi = (j-1._rp)/(ny-1._rp)
+        yg(j) = -1._rp + 2._rp*tanh(0.5_rp*alpha*xi)/tanh(0.5_rp*alpha)
       end do
     case('uniform')
       do j=1,ny
@@ -64,10 +80,16 @@ contains
         if(ios /= 0) call abort_run('grid file too short')
       end do
       close(iunit)
+      tol = 1.e-6_rp*(ytop-ybot)
+      if(abs(yg(1)-ybot) > tol .or. abs(yg(ny)-ytop) > tol) &
+        call abort_run('grid file must run from the bottom wall to the top wall (y = -1..1, or 0..ly)')
+      yg(:) = -1._rp + 2._rp*(yg(:)-ybot)/(ytop-ybot)
     case default
       call abort_run('unknown grid_type '//trim(grid_type))
     end select
     yg(1) = -1._rp; yg(ny) = 1._rp
+    yg(:) = 0.5_rp*(ybot+ytop) + 0.5_rp*(ytop-ybot)*yg(:)
+    yg(1) = ybot; yg(ny) = ytop
     do j=1,ny-1
       if(yg(j+1) <= yg(j)) call abort_run('grid points must be strictly increasing')
     end do
