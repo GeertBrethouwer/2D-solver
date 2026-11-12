@@ -31,9 +31,9 @@ module mod_compact
   real(rp), allocatable, public :: b1m(:,:)        ! (-nbw:nbw,ny) compact d/dxi on the uniform grid xi
   real(rp), allocatable, public :: t1mw(:),t1md(:),t1mu(:) ! Thomas factors of its LHS
   real(rp), allocatable, public :: rxi(:)          ! 1/(dy/dxi): D1m = diag(rxi) D_xi (metric first derivative)
-  real(rp), public :: ew1(6),ewn(6)                ! explicit one-sided 6-point d/dy at y = -1 (points 1..6)
-                                                   ! and y = +1 (points ny-5..ny)
-  real(rp), public :: ew2(7)                       ! explicit one-sided 7-point d2/dy2 at y = -1 (5th order)
+  real(rp), public :: ew1(6),ewn(6)                ! explicit one-sided 6-point d/dy at the bottom wall
+                                                   ! (points 1..6) and the top wall (points ny-5..ny)
+  real(rp), public :: ew2(7)                       ! explicit one-sided 7-point d2/dy2 at the bottom wall
   real(rp), allocatable, public :: c21(:)          ! first row of D2 = A2^{-1} B2 (dense)
   integer , public :: nc21                         ! effective extent of c21
 contains
@@ -82,7 +82,7 @@ contains
       close(iunit)
       tol = 1.e-6_rp*(ytop-ybot)
       if(abs(yg(1)-ybot) > tol .or. abs(yg(ny)-ytop) > tol) &
-        call abort_run('grid file must run from the bottom wall to the top wall (y = -1..1, or 0..ly)')
+        call abort_run('grid file must run from the bottom wall to the top wall (y = 0..ly)')
       yg(:) = -1._rp + 2._rp*(yg(:)-ybot)/(ytop-ybot)
     case default
       call abort_run('unknown grid_type '//trim(grid_type))

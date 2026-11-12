@@ -13,6 +13,7 @@
 &grid
   nx = 256, ny = 129
   lx = 2.0
+  ly = 2.0                             ! box height: walls at y = 0 and y = ly
   grid_type = 'tanh', grid_alpha = 1.5, fd_order = 6
 /
 &physics

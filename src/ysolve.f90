@@ -640,7 +640,7 @@ contains
     end if
     if(freeslip_bot) then
       !
-      ! free-slip bottom wall: du/dy = i D2 v/kx = 0, i.e. d2v/dy2 = 0 at y = -1 (with v = 0), with
+      ! free-slip bottom wall: du/dy = i D2 v/kx = 0, i.e. d2v/dy2 = 0 at y = 0 (with v = 0), with
       ! the 7-point one-sided derivative ('explicit') or the first row of the compact D2 ('compact')
       !
       dw1(:) = 0._rp
@@ -745,7 +745,7 @@ contains
     !
     ! for substep q, c = b_q dt nu: wall corrections of (1 + c kx^2) - c D2 and the inverse 2x2
     ! matrix [D1 v_a(-1) D1 v_b(-1); D1 v_a(1) D1 v_b(1)] of the homogeneous solutions phi_a
-    ! (1 at y = -1), phi_b (1 at y = +1), v_a,b from (D2 - kx^2) v = phi, v = 0 at the walls
+    ! (1 at the bottom wall), phi_b (1 at the top wall), v_a,b from (D2 - kx^2) v = phi, v = 0 at the walls
     !
     implicit none
     integer , intent(in) :: q

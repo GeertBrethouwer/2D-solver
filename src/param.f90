@@ -12,7 +12,7 @@ module mod_param
   !
   integer  :: nx = 64, ny = 65              ! Fourier modes in x (even), points in y (walls included)
   real(rp) :: lx = 2*pi                     ! box length
-  real(rp) :: ly = 0._rp                    ! > 0: wall-normal domain y in [0,ly]; 0 (default): y in [-1,1]
+  real(rp) :: ly = 2._rp                    ! box height: walls at y = 0 and y = ly
   character(len=16)  :: grid_type = 'auto'  ! 'auto': 'tanh_top' with a free-slip bottom wall, else 'tanh';
                                             ! 'tanh' (refined at both walls), 'tanh_top' (refined at the top
                                             ! wall only), 'uniform' or 'file'
@@ -30,7 +30,7 @@ module mod_param
   character(len=8) :: vv_neumann = 'explicit' ! wall derivative in dv/dy = 0: 'explicit' (6-point one-sided)
                                             ! or 'compact' (row of D1: divergence exactly zero at the walls)
   character(len=16) :: nl_form = 'rotational' ! 'rotational' u x omega (5 FFTs) or 'advective' (8 FFTs)
-  character(len=8) :: bc_bot = 'noslip'     ! velocity at the bottom wall y = -1: 'noslip' (u = v = 0) or
+  character(len=8) :: bc_bot = 'noslip'     ! velocity at the bottom wall y = 0: 'noslip' (u = v = 0) or
                                             ! 'freeslip' (v = 0, du/dy = 0); the top wall is always no-slip
   logical  :: freeslip_bot = .false.        ! derived: bc_bot == 'freeslip'
   !
@@ -83,9 +83,9 @@ module mod_param
   ! derived quantities
   !
   integer  :: nxh, mx                      ! number of kx modes kept; physical (dealiased) grid size
-  real(rp) :: ybot = -1._rp, ytop = 1._rp  ! wall positions
-  real(rp) :: hgt = 2._rp                  ! wall distance ytop - ybot
-  real(rp) :: ymid = 0._rp, hhalf = 1._rp  ! centre and half of the wall distance
+  real(rp) :: ybot = 0._rp, ytop = 2._rp   ! wall positions: 0 and ly
+  real(rp) :: hgt = 2._rp                  ! wall distance ytop - ybot = ly
+  real(rp) :: ymid = 1._rp, hhalf = 1._rp  ! centre and half of the wall distance
   real(rp) :: visc
   real(rp) :: diff(nscal_max)
   real(rp) :: gvec(2) = 0._rp              ! unit vector in the direction of gravity
@@ -147,10 +147,8 @@ contains
     freeslip_bot = (bc_bot == 'freeslip')
     if(all(scal_form /= ['advective ','divergence','skew      '])) &
       call abort_run("scal_form must be 'advective', 'divergence' or 'skew'")
-    if(ly < 0._rp) call abort_run('ly must be > 0 (or 0 for y in [-1,1])')
-    if(ly > 0._rp) then
-      ybot = 0._rp; ytop = ly
-    end if
+    if(ly <= 0._rp) call abort_run('ly (box height) must be > 0')
+    ybot = 0._rp; ytop = ly
     hgt = ytop-ybot; ymid = 0.5_rp*(ybot+ytop); hhalf = 0.5_rp*hgt
     if(trim(grid_type) == 'auto') then
       if(freeslip_bot) then
@@ -185,7 +183,7 @@ contains
       write(*,'(a)') ' ============================== solver2d run set-up ==============================='
       write(*,fi) 'Fourier modes nx / points ny',nx,ny
       write(*,fr) 'box length lx',lx
-      write(*,fr) 'walls at y = ',ybot,ytop
+      write(*,fr) 'box height ly (walls at y = 0, ly)',ly
       write(*,f1) 'wall-normal grid',trim(grid_type)
       if(grid_type(1:4) == 'tanh') write(*,fr) '  stretching alpha_s',grid_alpha
       write(*,fi) 'compact scheme order',fd_order
@@ -199,7 +197,7 @@ contains
       write(*,f1) 'Navier-Stokes solver','velocity-vorticity (phi = lap v), implicit viscous (SMR RK3)'
       write(*,f1) 'nonlinear term',trim(nl_form)
       write(*,f1) 'wall derivative in dv/dy = 0',trim(vv_neumann)
-      write(*,f1) 'bottom wall (y = -1)',merge('free-slip (v = 0, du/dy = 0)','no-slip                     ',freeslip_bot)
+      write(*,f1) 'bottom wall (y = 0)',merge('free-slip (v = 0, du/dy = 0)','no-slip                     ',freeslip_bot)
       if(fixed_dt) then
         write(*,fr) 'fixed time step dt',dt
       else

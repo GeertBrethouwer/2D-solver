@@ -1,7 +1,7 @@
 # 2D solver — DNS of two-dimensional channel flow with active scalars (CPU and Grace Hopper GPUs)
 
 `solver2d` solves the incompressible Navier–Stokes equations in a two-dimensional plane channel
-(x periodic, walls at y = ±1, or at y = 0 and y = ly), together with active scalars (two by default, up to 16) that act on the flow
+(x periodic with length `lx`, walls at y = 0 and y = `ly`), together with active scalars (two by default, up to 16) that act on the flow
 through a Boussinesq buoyancy term. It is the two-dimensional counterpart of the velocity–vorticity option
 (`ns_method = 'vv'`) of [HiCHAN](https://github.com/GeertBrethouwer/hichan). The numerics, input format,
 output files and GPU design are the same as in HiCHAN, with the spanwise direction removed.
@@ -17,7 +17,7 @@ output files and GPU design are the same as in HiCHAN, with the spanwise directi
 * **Scalars:** any number (default 2), passive or active, with Dirichlet or Neumann walls, sources, and gravity in
   any direction in the x–y plane. All scalars are solved in one batched GPU kernel.
 * **Walls:** the top wall is no-slip. The bottom wall is no-slip or free-slip (`bc_bot`), e.g. for an
-  open channel. The walls are at y = ±1 (default) or at y = 0 and y = `ly`. The default grid is refined at
+  open channel. The walls are at y = 0 and y = `ly` (box height, default 2). The default grid is refined at
   every no-slip wall: at both walls, or only at the top wall when the bottom wall is free-slip.
 * **Parallelisation:** MPI with one rank per GPU, OpenACC kernels and cuFFT, made for one NSC Arrhenius node
   (4 × NVIDIA GH200). The same source runs on CPUs with FFTW.
@@ -42,13 +42,16 @@ second condition becomes ∂²v/∂y² = 0 there. It replaces dv/dy = 0 in the s
 superposition, so the cost is unchanged. The wall functional is a 7-point one-sided second derivative
 (`vv_neumann = 'explicit'`) or the first row of the compact D2 (`'compact'`). The mean flow gets
 dU/dy = 0 at the bottom wall, by superposition with the homogeneous solution U(−1) = 1, using the compact D1 row. The
-laminar initial profile is then the open-channel profile U = U_max(1 − ζ²), ζ = (y − y_bot)/h, with h the wall
-distance. With CFR, −dp/dx = 3/(Re h²) for U_b = 1 (0.75/Re for h = 2). In `log.dat`, τ_w and Re_τ are those of
+laminar initial profile is then the open-channel profile U = U_max(1 − (y/ly)²). With CFR,
+−dp/dx = 3/(Re ly²) for U_b = 1 (0.75/Re for ly = 2), against 12/(Re ly²) with two no-slip walls. In `log.dat`, τ_w and Re_τ are those of
 the (no-slip) top wall. The scalars keep their own wall conditions (`sbc_bot`).
 
 **Wall-normal domain and grid.**
-* `ly = 0` (default): walls at y = −1 and 1. `ly > 0`: walls at y = 0 and y = `ly`. The length unit stays
-  the one in which `re`, `lx` and `ly` are given.
+* `ly` in `&grid` is the box height: the walls are at y = 0 and y = `ly`, default 2. `re`, `lx` and `ly`
+  use the same length unit. With `ly = 2` and `re` based on the half-height, the set-up is the classical channel
+  with half-height 1, as in HiCHAN (there with walls at ±1).
+* Restart files store the wall positions. A restart is accepted if the box height is the same, so files of
+  earlier versions (walls at −1 and 1) can be restarted with `ly = 2`.
 * `grid_type = 'auto'` (default) chooses `'tanh'` (refined at both walls) with two no-slip walls, and
   `'tanh_top'` (refined only at the no-slip top wall, coarse at the free-slip bottom) with `bc_bot = 'freeslip'`.
 * With the same `grid_alpha`, `'tanh_top'` with ny points is exactly the upper half of the `'tanh'` grid of a
@@ -59,7 +62,7 @@ the (no-slip) top wall. The scalars keep their own wall conditions (`sbc_bot`).
 * A coarse grid near the free-slip wall suits shear-driven flow. Flow driven at the free-slip wall needs
   resolution there too. Example: in Rayleigh–Bénard onset with ny = 33, `'tanh_top'` gives Ra_c to 6e-4 and
   `'tanh'` to 5e-5; at ny = 65, `'tanh_top'` reaches 7e-5.
-* `tools/os_mode.py` (TS-wave initial mode) assumes the default walls at ±1.
+* `tools/os_mode.py` (TS-wave initial mode) assumes `ly = 2` (lengths in units of the half-height).
 
 The scalars obey `∂s/∂t + u·∇s = (1/(Re Pr)) ∇²s + Q`, and act on the flow as `−Σ ri(n) s_n e_g`. Here `e_g`
 is the direction of gravity. `ri > 0` is a scalar that makes the fluid lighter (temperature), `ri < 0` one
@@ -158,7 +161,7 @@ Use `timing = .true.` to see where the time goes.
 
 | namelist | contents |
 |---|---|
-| `&grid` | `nx` (Fourier modes, even), `ny` (points incl. walls), `lx`, `ly` (0: walls at ±1; > 0: walls at 0 and ly), `grid_type` (`auto`/`tanh`/`tanh_top`/`uniform`/`file`), `grid_alpha`, `grid_file`, `fd_order` (4 or 6), `dealias` |
+| `&grid` | `nx` (Fourier modes, even), `ny` (points incl. walls), `lx`, `ly` (box height; walls at y = 0 and ly; default 2), `grid_type` (`auto`/`tanh`/`tanh_top`/`uniform`/`file`), `grid_alpha`, `grid_file`, `fd_order` (4 or 6), `dealias` |
 | `&physics` | `re`, `forcing` (`cfr`/`cpg`), `ubulk`, `dpdx`, `vv_neumann` (`explicit`/`compact`), `nl_form` (`rotational`/`advective`) |
 | `&time` | `nstep`, `tmax`, `wall_time_max`, `fixed_dt`, `dt`, `dt_max`, `dt_growth`, `cfl`, `cfl_visc` |
 | `&init` | `init_type` (`laminar`/`noise`/`mode`/`restart`), `init_amp`, `init_seed`, `mode_file`, `mode_kx`, `restart_file`, `reset_time` |
@@ -169,7 +172,7 @@ Use `timing = .true.` to see where the time goes.
 The adaptive time step obeys the advective CFL limit, the explicit-diffusion limit (scalars with θ < ½), and
 the internal-gravity-wave limit `Δt ≤ cfl/N`, with `N² = |ri| max|dS/dy|`. It is kept piecewise constant,
 because the implicit matrices depend on Δt. Between two walls at distance h, the Rayleigh number of a scalar
-with wall difference Δs is `Ra = ri Δs h³ re² pr` (`8 ri Δs re² pr` for the default walls at ±1).
+with wall difference Δs is `Ra = ri Δs ly³ re² pr` (`8 ri Δs re² pr` for `ly = 2`).
 
 ## Output (in `data_dir`)
 
@@ -211,7 +214,8 @@ python3 tools/plot_field.py data 8000 s1 s2 v -o fields.png
 | Batched scalar solve (both scalars in one kernel; one Dirichlet, one Neumann/Dirichlet with source) | bit-identical to the per-scalar solves |
 | Free-slip bottom, laminar CFR (`bc_bot = 'freeslip'`) | open-channel profile kept exactly, −dp/dx = 0.75/Re, τ_w = 1.5/Re (top wall) |
 | Walls at 0 and ly = 1, laminar, CFR and CPG, no-slip (`'tanh'`) and free-slip (`'auto'` → `'tanh_top'`) | exact: −dp/dx = 0.012 = 3/(Re (h/2)²) and 0.003 = 3/(Re h²); U_b = 1 at those gradients; Re_τ = 38.73 and 54.77 as expected |
-| Rayleigh–Bénard onset with walls at 0 and 1, two active scalars | no-slip: Ra_c = 1707.80; free-slip bottom: 1100.59 (`'tanh'`, ny = 33), 1100.57 (`'tanh_top'`, ny = 65), identical to the ±1 domain |
+| Rayleigh–Bénard onset with walls at 0 and 1, two active scalars | no-slip: Ra_c = 1707.80; free-slip bottom: 1100.59 (`'tanh'`, ny = 33), 1100.57 (`'tanh_top'`, ny = 65), identical to `ly = 2` |
+| y from 0 to `ly` always (default `ly = 2`) instead of −1..1 | same results as the −1..1 version to round-off (2e-14); restart files of that version accepted; TS wave, Rayleigh–Bénard (no-slip and free-slip) and exact laminar checks unchanged; 1 vs 4 ranks bit-identical |
 | Default domain and grid after these changes | bit-identical to the previous version; restart headers of the previous version are still read |
 | ly = 2.5, free-slip, `'auto'` grid, nonlinear, two active scalars | bit-identical on 1 and 4 ranks; 150 steps + restart (2 → 3 ranks) + 150 steps agrees with 300 steps to 1.5e-13; OpenACC host build agrees to 7e-13; `DEBUG=1` clean |
 | Rayleigh–Bénard onset, free-slip bottom / no-slip top, two active scalars (`examples/rayleigh_benard_freeslip`) | Ra_c = 1100.59 (ny = 33), 1100.64 (ny = 65); linear theory 1100.65 (rigid–free) |

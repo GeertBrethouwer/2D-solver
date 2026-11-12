@@ -91,8 +91,8 @@ contains
     close(iunit)
     if(nxr /= nx .or. nyr /= ny) call abort_run('restart file has a different resolution')
     if(abs(lxr-lx) > 1.e-10_rp*lx) call abort_run('restart file has a different box length')
-    if(abs(ybr-ybot) > 1.e-10_rp*hgt .or. abs(ytr-ytop) > 1.e-10_rp*hgt) &
-      call abort_run('restart file has different wall positions (ly)')
+    ! only the box height matters (files of older versions have their walls at -1 and 1)
+    if(abs((ytr-ybr)-ly) > 1.e-10_rp*ly) call abort_run('restart file has a different box height ly')
     call spec_subarray(dtype)
     call MPI_FILE_OPEN(MPI_COMM_WORLD,trim(fname)//'.bin',MPI_MODE_RDONLY,MPI_INFO_NULL,fh,ierr)
     if(ierr /= MPI_SUCCESS) call abort_run('cannot open '//trim(fname)//'.bin')

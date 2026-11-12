@@ -8,6 +8,7 @@
 &grid
   nx = 4, ny = 65                      ! one streamwise mode is enough (linear problem)
   lx = 5.609986881410345               ! lx = 2 pi / 1.12
+  ly = 2.0                            ! box height: walls at y = 0 and y = ly (os_mode.py assumes 2)
   grid_type = 'tanh', grid_alpha = 4.0, fd_order = 6
 /
 &physics

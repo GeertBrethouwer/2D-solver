@@ -9,6 +9,7 @@
 &grid
   nx = 4, ny = 33                      ! one horizontal mode (linear problem)
   lx = 4.031570
+  ly = 2.0                             ! box height: walls at y = 0 and y = ly
   grid_type = 'tanh', grid_alpha = 1.5, fd_order = 6
 /
 &physics

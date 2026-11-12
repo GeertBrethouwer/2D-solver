@@ -1,12 +1,12 @@
 !======================================================================================================
 !  solver2d: every input item with its default value. Copy as input.nml and edit.
-!  Units: length L (y in [-1,1], or [0,ly] with ly > 0), velocity U_ref, time L/U_ref; re = U_ref L/nu.
+!  Units: length L (walls at y = 0 and y = ly), velocity U_ref, time L/U_ref; re = U_ref L/nu.
 !======================================================================================================
 &grid
   nx = 64                  ! Fourier modes in x (even); kx = 0..nx/2-1 are kept (Nyquist dropped)
   ny = 65                  ! wall-normal points incl. both walls (>= 9)
   lx = 6.283185307179586   ! box length
-  ly = 0.0                 ! 0: walls at y = -1 and 1; > 0: walls at y = 0 and y = ly
+  ly = 2.0                 ! box height: walls at y = 0 and y = ly (2 = classical channel, half-height 1)
   grid_type = 'auto'       ! 'auto': 'tanh_top' if bc_bot = 'freeslip', else 'tanh';
                            ! 'tanh'     eta = tanh(alpha(xi-1/2))/tanh(alpha/2), refined at both walls;
                            ! 'tanh_top' eta = -1 + 2 tanh(alpha xi/2)/tanh(alpha/2), refined at the top wall
@@ -26,7 +26,7 @@
                            ! more accurate) or the boundary row of the compact D1 ('compact': divergence
                            ! exactly zero also at the walls)
   nl_form = 'rotational'   ! 'rotational' u x omega (5 FFTs, energy conserving) or 'advective' (8 FFTs)
-  bc_bot = 'noslip'        ! bottom wall y = -1: 'noslip' (u = v = 0) or 'freeslip' (v = 0, du/dy = 0,
+  bc_bot = 'noslip'        ! bottom wall y = 0: 'noslip' (u = v = 0) or 'freeslip' (v = 0, du/dy = 0,
                            ! e.g. an open channel or a free surface); the top wall is always no-slip.
                            ! 'freeslip' imposes d2v/dy2 = 0 (7-point one-sided with vv_neumann =
                            ! 'explicit', first row of the compact D2 with 'compact') and dU/dy = 0
@@ -70,8 +70,8 @@
                            ! 0 explicit RK3)
   sbc_bot(1) = 'D'         ! 'D' Dirichlet (value) or 'N' Neumann (wall-normal gradient)
   sbc_top(1) = 'D'
-  sval_bot(1) = 1.0        ! wall value or gradient at y = -1
-  sval_top(1) = -1.0       ! wall value or gradient at y = +1
+  sval_bot(1) = 1.0        ! wall value or gradient at y = 0
+  sval_top(1) = -1.0       ! wall value or gradient at y = ly
   ssrc_const(1) = 0.0      ! uniform source Q_c
   ssrc_u(1) = 0.0          ! source Q_u u/ubulk
   sinit(1) = 'linear'      ! 'linear' (between the Dirichlet values), 'zero', 'noise' (linear + noise)
