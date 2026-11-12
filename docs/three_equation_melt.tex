@@ -1,0 +1,195 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage[hidelinks]{hyperref}
+
+\title{The three-equation melt condition at an ice--water interface\\[0.3em]
+\large and its form in \texttt{solver2d}}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Geometry and notation}
+
+The ice occupies $y<0$ and the water $0<y<L_y$; the ice--water interface is the wall $y=0$ (in
+\texttt{solver2d}: \texttt{bc\_bot = 'noslip'}, \texttt{bc\_top = 'freeslip'}, gravity along $+y$).
+The unit normal $\mathbf{n}=\mathbf{e}_y$ points from the interface into the water. The subscript $b$
+denotes values at the interface ($y=0$). The melt rate $m$ is the speed at which the interface
+recedes into the ice (in m\,s$^{-1}$ of ice), positive for melting.
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+symbol & meaning & typical value \\
+\midrule
+$T,\ S$ & water temperature, salinity & \\
+$T_b,\ S_b$ & temperature and salinity at the interface & unknown \\
+$m$ & melt rate (ice thickness per unit time) & unknown \\
+$p_b$ & pressure at the interface & \\
+$\lambda_1$ & liquidus slope & $\approx -5.7\times10^{-2}$ $^\circ$C\,psu$^{-1}$ \\
+$\lambda_2$ & liquidus offset & $\approx 8.3\times10^{-2}$ $^\circ$C \\
+$\lambda_3$ & pressure coefficient of the freezing point & $\approx -7.5\times10^{-4}$ $^\circ$C\,dbar$^{-1}$ \\
+$L_f$ & latent heat of fusion & $3.34\times10^{5}$ J\,kg$^{-1}$ \\
+$c_w,\ c_i$ & specific heat of water, ice & $\approx 3974$, $2009$ J\,kg$^{-1}$K$^{-1}$ \\
+$\rho_w,\ \rho_i$ & density of water, ice & $\approx 1028$, $917$ kg\,m$^{-3}$ \\
+$\kappa_T,\ \kappa_S$ & molecular diffusivities of heat and salt in water & $\approx 1.4\times10^{-7}$, $\approx 7\times10^{-10}$ m$^2$s$^{-1}$ \\
+$\kappa_i$ & thermal diffusivity of ice & $\approx 1.1\times10^{-6}$ m$^2$s$^{-1}$ \\
+$S_i$ & salinity of the ice & $\approx 0$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The liquidus constants differ slightly between sources; the values above are representative of those
+used in ice--ocean models (e.g.\ Holland \& Jenkins 1999). Check them, and the other material
+properties, against the source you use.
+
+\section{The three equations}
+
+\paragraph{1. Freezing point (liquidus).} The interface is at the local freezing temperature:
+\begin{equation}
+  T_b = \lambda_1 S_b + \lambda_2 + \lambda_3\, p_b . \label{eq:liquidus}
+\end{equation}
+
+\paragraph{2. Heat balance.} The heat conducted from the water to the interface melts ice and is
+partly conducted into the ice:
+\begin{equation}
+  \rho_w c_w \kappa_T \left.\frac{\partial T}{\partial y}\right|_b
+  = \rho_i L_f\, m \;+\; \rho_i c_i \kappa_i \left.\frac{\partial T_i}{\partial y}\right|_b . \label{eq:heat}
+\end{equation}
+The last term (conduction into the ice, $T_i$ the ice temperature) is often neglected, or modelled as
+$\rho_i c_i \kappa_i (T_b - T_s)/h_i$ with $T_s$ the temperature at the far side of an ice layer of
+thickness $h_i$.
+
+\paragraph{3. Salt balance.} The ice holds (almost) no salt. The salt that the meltwater dilutes at the
+interface must be supplied by diffusion in the water:
+\begin{equation}
+  \rho_w \kappa_S \left.\frac{\partial S}{\partial y}\right|_b = \rho_i\, m\, (S_b - S_i)
+  \;\approx\; \rho_i\, m\, S_b . \label{eq:salt}
+\end{equation}
+
+Equations \eqref{eq:liquidus}--\eqref{eq:salt} determine the three unknowns $T_b$, $S_b$ and $m$.
+For melting ($m>0$) the interface is fresher than the water ($\partial S/\partial y|_b>0$) and warmer
+than the freezing point of the far-field water. Since $\kappa_T/\kappa_S \approx 10^2$, salt
+diffusion limits the melt rate together with the heat supply.
+
+\paragraph{Signs.} With $\mathbf{n}=\mathbf{e}_y$ pointing into the water, the conductive fluxes
+\emph{towards} the interface are $\rho_w c_w \kappa_T\, \partial T/\partial y|_b$ and
+$\rho_w \kappa_S\, \partial S/\partial y|_b$. This holds for the set-up above: ice at $y=0$, water at
+$y>0$, gravity along $+y$ (the ice is physically on top). If instead the ice is at $y=L_y$ (water at
+$y<L_y$, normal $-\mathbf{e}_y$), replace $\partial/\partial y$ by $-\partial/\partial y$.
+
+\paragraph{Moving interface.} The interface recedes into the ice at speed $m$. Mass conservation
+across the interface, $\rho_i\, m = \rho_w\,(m + v_b)$ in the frame of the interface, gives the water
+velocity at the interface (in the frame of the ice)
+\begin{equation}
+  v_b = \left(\frac{\rho_i}{\rho_w} - 1\right) m ,
+\end{equation}
+which is negative: since ice is less dense than water, melting contracts the volume and the water
+moves towards the ice. Both are many orders of
+magnitude slower than the flow, so most simulations keep the interface fixed and impermeable
+(quasi-steady approximation), as assumed below.
+
+\section{Special cases}
+
+\paragraph{Stefan condition (fresh water).} Without salt, \eqref{eq:salt} drops out and
+\eqref{eq:liquidus} becomes $T_b = T_m(p_b)$ (0\,$^\circ$C at atmospheric pressure):
+\begin{equation}
+  T_b = T_m, \qquad
+  \rho_i L_f\, m = \rho_w c_w \kappa_T \left.\frac{\partial T}{\partial y}\right|_b
+  - \rho_i c_i \kappa_i \left.\frac{\partial T_i}{\partial y}\right|_b .
+\end{equation}
+
+\paragraph{Transfer-coefficient form (unresolved boundary layers).} Ocean models do not resolve the
+diffusive sublayers and write the fluxes with transfer coefficients $\gamma_T$, $\gamma_S$ and the
+friction velocity $u_*$:
+\begin{equation}
+  \kappa_T \left.\frac{\partial T}{\partial y}\right|_b \to \gamma_T u_* (T_w - T_b), \qquad
+  \kappa_S \left.\frac{\partial S}{\partial y}\right|_b \to \gamma_S u_* (S_w - S_b),
+\end{equation}
+with $T_w$, $S_w$ the values in the water outside the sublayer. Neglecting conduction into the ice
+and with $S_i=0$, eliminating $m$ and $T_b$ gives a quadratic for $S_b$:
+\begin{equation}
+  a\, S_b^2 + b\, S_b + c = 0, \qquad
+  \begin{aligned}
+    a &= c_w \gamma_T \lambda_1, \\
+    b &= -\left[c_w \gamma_T (T_w - \lambda_2 - \lambda_3 p_b) + L_f \gamma_S\right], \\
+    c &= L_f \gamma_S\, S_w ,
+  \end{aligned}
+  \label{eq:quadratic}
+\end{equation}
+Since $\lambda_1<0$, $a<0$ while $c>0$, so the two roots have opposite signs and the physical root is
+the positive one (it satisfies $0 < S_b \le S_w$ for melting). Then $T_b$ follows from
+\eqref{eq:liquidus} and $m = (\rho_w/\rho_i)\,\gamma_S u_* (S_w - S_b)/S_b$.
+
+In a resolved simulation the gradients are computed directly at the wall and no transfer coefficients
+are needed. If the wall gradient is linearised as
+$\partial T/\partial y|_b \approx (T_1 - T_b)/\delta_T$ (and similarly for $S$), the same quadratic
+\eqref{eq:quadratic} follows with $\gamma_T u_* \to \kappa_T/\delta_T$,
+$\gamma_S u_* \to \kappa_S/\delta_S$, $T_w \to T_1$ and $S_w \to S_1$.
+
+\section{Non-dimensional form in \texttt{solver2d}}
+
+\texttt{solver2d} uses a length unit $\ell$, a velocity unit $U$, and $Re = U\ell/\nu$. The
+diffusivities are $\kappa_T = U\ell/(Re\,Pr)$ and $\kappa_S = U\ell/(Re\,Sc)$. Write the scalars as
+\begin{equation}
+  T = T_{\mathrm{ref}} + \Delta T\, \theta, \qquad S = S_{\mathrm{ref}} + \Delta S\, s ,
+\end{equation}
+($\theta$ and $s$ are scalars 1 and 2 of the code) and the melt rate as a water velocity in units of
+$U$:
+\begin{equation}
+  m^* = \frac{\rho_i\, m}{\rho_w\, U} .
+\end{equation}
+With $y$ in units of $\ell$, equations \eqref{eq:liquidus}--\eqref{eq:salt} become
+\begin{align}
+  \theta_b &= \Lambda\, s_b + \theta_{f}, &
+  \Lambda &= \frac{\lambda_1 \Delta S}{\Delta T}, \quad
+  \theta_f = \frac{\lambda_1 S_{\mathrm{ref}} + \lambda_2 + \lambda_3 p_b - T_{\mathrm{ref}}}{\Delta T},
+  \label{eq:nd-liquidus}\\[0.4em]
+  m^* &= St \left( \frac{1}{Re\,Pr} \left.\frac{\partial \theta}{\partial y}\right|_b - q_i \right), &
+  St &= \frac{c_w \Delta T}{L_f},
+  \label{eq:nd-heat}\\[0.4em]
+  \frac{1}{Re\,Sc} \left.\frac{\partial s}{\partial y}\right|_b &= m^*\, (s_b + \sigma), &
+  \sigma &= \frac{S_{\mathrm{ref}} - S_i}{\Delta S},
+  \label{eq:nd-salt}
+\end{align}
+with the Stefan number $St$ and the non-dimensional conduction into the ice
+\begin{equation}
+  q_i = \frac{\rho_i c_i \kappa_i}{\rho_w c_w U \Delta T} \left.\frac{\partial T_i}{\partial y}\right|_b
+  \qquad (q_i = 0 \text{ if conduction into the ice is neglected}).
+\end{equation}
+Equation \eqref{eq:nd-salt} uses $S_b - S_i = \Delta S\,(s_b + \sigma)$. If $S_{\mathrm{ref}}$ is
+chosen as the ice salinity ($S_{\mathrm{ref}} = S_i$, e.g.\ $0$), then $\sigma = 0$.
+
+The new non-dimensional parameters are $St$, $\Lambda$, $\theta_f$, $\sigma$ (and $q_i$). In
+\texttt{solver2d} the buoyancy enters through the Richardson numbers \texttt{ri(1)}, \texttt{ri(2)}
+of $\theta$ and $s$, and the diffusivities through \texttt{pr(1)} $=Pr$ and \texttt{pr(2)} $=Sc$.
+
+\section{Use as a boundary condition (not yet implemented)}
+
+The conditions hold at every point $x$ of the interface and are nonlinear ($m^* s_b$) and coupled
+($\theta$ and $s$). A practical implementation in \texttt{solver2d}:
+\begin{enumerate}
+  \item At each Runge--Kutta substep, evaluate $\partial\theta/\partial y|_b$ and
+        $\partial s/\partial y|_b$ in physical space (all $x$), from the current fields.
+  \item At each $x$, solve \eqref{eq:nd-liquidus}--\eqref{eq:nd-salt} for $\theta_b$, $s_b$, $m^*$,
+        e.g.\ with the linearised wall gradients of Sec.~3, which gives the quadratic
+        \eqref{eq:quadratic} at every point.
+  \item Transform $\theta_b(x)$ and $s_b(x)$ to Fourier space and impose them as Dirichlet values
+        on all Fourier modes in the (batched) scalar solve. The code currently imposes wall values on
+        the mean mode only, so this needs per-mode wall values.
+  \item Lag the condition by one substep, or iterate it within the substep; the interface values
+        change slowly compared with the flow.
+  \item Output the melt rate $m^*(x,t)$ and its average.
+\end{enumerate}
+
+\section*{References}
+\begin{itemize}
+  \item H.~H. Hellmer and D.~J. Olbers, A two-dimensional model for the thermohaline circulation
+        under an ice shelf, \emph{Antarctic Science} 1 (1989) 325--336.
+  \item D.~M. Holland and A. Jenkins, Modeling thermodynamic ice--ocean interactions at the base of an
+        ice shelf, \emph{J. Phys. Oceanogr.} 29 (1999) 1787--1800.
+\end{itemize}
+
+\end{document}
