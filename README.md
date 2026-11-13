@@ -112,7 +112,8 @@ examples/          input_reference.nml (every input item), ts_wave, rayleigh_ben
                    salt_fingers (two scalars with opposite buoyancy), salt_fingers_gpu (production-size
                    template for one Arrhenius node), arrhenius_job.sh
 tools/             os_mode.py (Orr–Sommerfeld mode for init_type = 'mode'; needs numpy, scipy),
-                   plot_field.py (plots the 2D field output; needs numpy, matplotlib)
+                   plot_field.py (plots the 2D field output, Scientific Colour Maps, colour ranges;
+                   needs numpy, matplotlib)
 ```
 
 ## Building
@@ -208,6 +209,24 @@ with wall difference Δs is `Ra = ri Δs ly³ re² pr` (`8 ri Δs re² pr` for `
 
 ```bash
 python3 tools/plot_field.py data 8000 s1 s2 v -o fields.png
+```
+
+Options of `plot_field.py` (full list with `-h`):
+
+* **Colour maps:**
+  * `--scmap NAME` sets the colour map of the scalars; `--cmap NAME` sets it for all fields.
+  * `NAME` is a Scientific Colour Map (Crameri: acton, batlow, vik, roma, …), read from
+    `DIR/NAME/NAME.txt` (or `.mat`/`.cpt`); a file path also works.
+  * `DIR` is `--cmap-dir`, else `$SCM_DIR`, else `/scratch/geert/matlab_colours`.
+  * A matplotlib name also works, and `NAME_r` reverses a map.
+* **Colour ranges:**
+  * `--srange MIN MAX` sets the range of all scalars.
+  * `--clim NAME MIN MAX` sets the range of one field; it can be repeated and overrides `--srange`.
+  * Values outside the range are saturated, with arrows on the colour bar.
+  * Without these options, scalars use the range of their wall values.
+
+```bash
+python3 tools/plot_field.py data 8000 s1 s2 v --scmap acton --cmap vik --srange 0 1 --clim s2 0 0.3
 ```
 
 ## Validation (CPU, in this repository)
