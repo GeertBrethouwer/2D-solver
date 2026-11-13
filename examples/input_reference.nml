@@ -77,7 +77,9 @@
   sval_top(1) = -1.0       ! wall value or gradient at y = ly
   ssrc_const(1) = 0.0      ! uniform source Q_c
   ssrc_u(1) = 0.0          ! source Q_u u/ubulk
-  sinit(1) = 'linear'      ! 'linear' (between the Dirichlet values), 'zero', 'noise' (linear + noise)
+  sinit(1) = 'linear'      ! 'linear' (between the Dirichlet values), 'zero', 'one' (uniform value 1,
+                           ! walls included; Dirichlet wall values take over in the first time step),
+                           ! 'noise' (linear + noise)
   scal_form = 'advective'  ! 'advective', 'divergence', or 'skew' (conserves the scalar variance)
 /
 &buoyancy

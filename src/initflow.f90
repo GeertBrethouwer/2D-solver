@@ -129,6 +129,8 @@ contains
               s(1,k,n) = 0.5_rp*(sval_bot(n)*(1._rp-y) + sval_top(n)*(1._rp+y))
             end if
           case('zero')
+          case('one')
+            s(1,k,n) = 1._rp                   ! uniform value 1, walls included
           case default
             call abort_run('unknown sinit')
           end select

@@ -75,7 +75,7 @@ module mod_param
   real(rp) :: sval_bot(nscal_max) = 1._rp, sval_top(nscal_max) = -1._rp ! wall value or wall-normal gradient
   real(rp) :: ssrc_const(nscal_max) = 0._rp      ! volumetric source  Q_c
   real(rp) :: ssrc_u(nscal_max) = 0._rp          ! source  Q_u*u/ubulk
-  character(len=16) :: sinit(nscal_max) = 'linear' ! 'linear', 'zero', 'noise'
+  character(len=16) :: sinit(nscal_max) = 'linear' ! 'linear', 'zero', 'one' (uniform 1), 'noise'
   character(len=12) :: scal_form = 'advective'   ! 'advective', 'divergence' or 'skew'
   !
   ! &buoyancy (Boussinesq): momentum source  - sum_n ri(n) * s_n * e_g
@@ -151,6 +151,10 @@ contains
     freeslip_bot = (bc_bot == 'freeslip')
     freeslip_top = (bc_top == 'freeslip')
     if(freeslip_bot .and. freeslip_top) call abort_run('at most one wall can be free-slip (bc_bot, bc_top)')
+    if(nscal > 0) then
+      if(any(sinit(1:nscal) /= 'linear' .and. sinit(1:nscal) /= 'zero' .and. sinit(1:nscal) /= 'one' .and. &
+             sinit(1:nscal) /= 'noise')) call abort_run("sinit must be 'linear', 'zero', 'one' or 'noise'")
+    end if
     if(all(scal_form /= ['advective ','divergence','skew      '])) &
       call abort_run("scal_form must be 'advective', 'divergence' or 'skew'")
     if(ly <= 0._rp) call abort_run('ly (box height) must be > 0')
