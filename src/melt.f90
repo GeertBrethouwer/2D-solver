@@ -14,8 +14,17 @@
 ! the scalar solves of the RK substep, and the conditions must hold with the wall gradients of the NEW
 ! scalars. The theta-method solve is linear in the wall value: for every Fourier mode k the new wall
 ! gradient is g_k = g0_k + R_k w_k, with w the wall value and R_k < 0 the response of the wall gradient
-! to a unit wall value (computed with the solver itself; it depends on k and on the diffusion
-! coefficient c of the substep, and is cached). The coupled problem is solved by the iteration
+! to a unit wall value (computed with the solver itself, with a homogeneous condition at y = ly; it
+! depends on the diffusion coefficient c of the substep and is cached).
+!
+! melt_xdiff = 'explicit' (default, melt_direct): the x-diffusion -kappa kx^2 s of theta and s is
+! advanced explicitly (RK3), so the y-operator (1 - c D2) and hence R and the response profile h(y) are
+! the same for every mode. In physical space g(x) = g0(x) + R w(x) holds at every x, and the condition
+! is imposed exactly in one pass: solve with zero wall values (s0, g0), solve the local conditions with
+! g0 + R w, and set s = s0 + w(x) h(y). Time-step limit dt <= cfl_visc/(kappa kx_max^2).
+!
+! melt_xdiff = 'implicit' (melt_iterate): R_k depends on kx through the implicit c kx^2 term, and the
+! nonlinear local conditions couple the modes. The coupled problem is solved by the iteration
 !
 !   1. solve the scalars with the current wall values w (all modes), wall gradients g;
 !   2. G = g - R_ref w with a constant R_ref (per scalar); at every x solve the conditions with the
@@ -54,6 +63,7 @@ module mod_melt
   complex(rp), allocatable :: mt(:,:,:)   ! (nkx,ny,nsb) work field for the wall response
   complex(rp), allocatable :: wo(:,:)     ! (nkx,2) previous iterate of the wall values
   real(rp)   , allocatable :: resp(:,:,:) ! (nkx,2,3) wall response R_k of temperature and salinity per substep
+  real(rp)   , allocatable :: hpr(:,:,:)  ! (ny,2,3) unit response profile h(y) (melt_xdiff = 'explicit')
   real(rp) :: rref(2,3) = 0._rp, c_cached(3) = -1._rp
   integer  :: melt_nit = 0                ! iterations in the last substep
   real(rp) :: melt_res = 0._rp            ! last change of the wall values
@@ -61,9 +71,9 @@ contains
   subroutine init_melt
     implicit none
     nsb = max(nscal,1)
-    allocate(mh(nkx,ny,3),mp(mx,nyA,3),mr(nkx,ny,nsb),mt(nkx,ny,nsb),wo(nkx,2),resp(nkx,2,3))
-    mh = 0; mp = 0; mr = 0; mt = 0; wo = 0; resp = 0
-    !$acc enter data copyin(mh,mp,mr,mt,wo,resp)
+    allocate(mh(nkx,ny,3),mp(mx,nyA,3),mr(nkx,ny,nsb),mt(nkx,ny,nsb),wo(nkx,2),resp(nkx,2,3),hpr(ny,2,3))
+    mh = 0; mp = 0; mr = 0; mt = 0; wo = 0; resp = 0; hpr = 0
+    !$acc enter data copyin(mh,mp,mr,mt,wo,resp,hpr)
   end subroutine init_melt
   !
   subroutine wall_response(q,dtb)
@@ -96,7 +106,7 @@ contains
       swb(i,it) = (1._rp,0._rp)
       if(is > 0) swb(i,is) = (1._rp,0._rp)
     end do
-    call scalar_solve(mt,nscal,dtb)
+    call scalar_solve(mt,nscal,dtb,0._rp)       ! homogeneous condition at y = ly
     rmin1 = huge(1._rp); rmax1 = -huge(1._rp); rmin2 = huge(1._rp); rmax2 = -huge(1._rp)
     !$acc parallel loop default(present) private(g) reduction(min:rmin1,rmin2) reduction(max:rmax1,rmax2) async(1)
     do i=1,nkx
@@ -107,6 +117,11 @@ contains
           g = g + c1(r)*real(mt(i,r,n),rp)
         end do
         resp(i,j,q) = g
+        if(i == 1) then                                   ! h(y) (the same for all kx if x-diffusion is explicit)
+          do r=1,ny
+            hpr(r,j,q) = real(mt(1,r,n),rp)
+          end do
+        end if
         if(j == 1) then
           rmin1 = min(rmin1,g); rmax1 = max(rmax1,g)
         else
@@ -135,19 +150,45 @@ contains
     complex(rp), intent(inout) :: s(nkx,ny,max(nscal,1))
     integer , intent(in) :: q
     real(rp), intent(in) :: dtb
-    integer :: i,r,n,it,is,iter,ierr
-    real(rp) :: aT,aS,kt,ks,st,lam,thf,sig,gth,gz,aa,bb,bq,cq,disc,z,sb,thb,mm,dw
-    complex(rp) :: g1,g2
-    logical :: salt,blow
-    it = melt_t; is = melt_s; salt = (is > 0); blow = melt_blowing
-    kt = diff(it); ks = 0._rp
-    if(salt) ks = diff(is)
-    st = melt_st; lam = melt_lambda; thf = melt_thf; sig = melt_sigma
+    integer :: i
+    real(rp) :: aT,aS
+    logical :: blow
+    blow = melt_blowing
     if(dtb /= c_cached(q)) then
       call wall_response(q,dtb)
       c_cached(q) = dtb
     end if
     aT = rref(1,q); aS = rref(2,q)
+    if(melt_xdiff == 'explicit') then
+      call melt_direct(s,q,dtb,aT,aS)
+    else
+      call melt_iterate(s,dtb,aT,aS)
+    end if
+    !
+    ! wall-normal velocity at the interface
+    !
+    !$acc parallel loop default(present) async(1)
+    do i=1,nkx
+      if(blow) then
+        vbw(i) = mh(i,1,3)
+      else
+        vbw(i) = (0._rp,0._rp)
+      end if
+    end do
+  end subroutine melt_solve
+  !
+  subroutine melt_iterate(s,dtb,aT,aS)
+    !
+    ! melt_xdiff = 'implicit': the wall response R_k depends on kx; iteration with R_ref = (aT,aS)
+    !
+    implicit none
+    complex(rp), intent(inout) :: s(nkx,ny,max(nscal,1))
+    real(rp), intent(in) :: dtb,aT,aS
+    integer :: i,r,n,it,is,iter,ierr
+    real(rp) :: sig,dw
+    complex(rp) :: g1,g2
+    logical :: salt
+    it = melt_t; is = melt_s; salt = (is > 0); sig = melt_sigma
     !
     ! keep the right-hand sides
     !
@@ -170,7 +211,7 @@ contains
           end do
         end do
       end if
-      call scalar_solve(s,nscal,dtb)
+      call scalar_solve(s,nscal,dtb,1._rp)
       !
       ! G = g - R_ref w in spectral space (row 1 of mh); w = theta_b and z = s_b + sigma
       !
@@ -195,54 +236,7 @@ contains
         end do
         mh(i,1,1) = g1; mh(i,1,2) = g2
       end do
-      call bwd_fft(mh(:,:,1),mp(:,:,1))
-      call bwd_fft(mh(:,:,2),mp(:,:,2))
-      !
-      ! interface conditions at every x of the wall row (on the rank that holds it)
-      !
-      !$acc kernels default(present) async(1)
-      mp(:,:,3) = 0._rp
-      !$acc end kernels
-      if(yA_lo == 1) then
-        !$acc parallel loop default(present) async(1)
-        do i=1,mx
-          gth = mp(i,1,1); gz = mp(i,1,2)
-          if(salt) then
-            aa = st*kt*(gth + aT*(thf - lam*sig))
-            bb = st*kt*aT*lam
-            bq = aa - ks*aS
-            cq = ks*gz
-            if(bb > 0._rp) then
-              disc = max(bq*bq + 4._rp*bb*cq,0._rp)
-              if(bq >= 0._rp) then
-                if(bq + sqrt(disc) > 0._rp) then
-                  z = 2._rp*cq/(bq + sqrt(disc))
-                else
-                  z = 0._rp
-                end if
-              else
-                z = (-bq + sqrt(disc))/(2._rp*bb)
-              end if
-            else if(bq > 0._rp) then
-              z = cq/bq
-            else
-              z = 0._rp
-            end if
-            z = max(z,0._rp)
-            sb  = z - sig
-            thb = lam*sb + thf
-            mm  = aa + bb*z
-          else
-            thb = thf
-            sb  = 0._rp
-            mm  = st*kt*(gth + aT*thf)
-          end if
-          mp(i,1,1) = thb; mp(i,1,2) = sb; mp(i,1,3) = mm
-        end do
-      end if
-      call fwd_fft(mp(:,:,1),mh(:,:,1))
-      call fwd_fft(mp(:,:,2),mh(:,:,2))
-      call fwd_fft(mp(:,:,3),mh(:,:,3))
+      call interface_local(aT,aS)
       !
       ! new wall values and their change
       !
@@ -261,18 +255,147 @@ contains
       melt_nit = iter; melt_res = dw
       if(dw < melt_tol) exit
     end do
+  end subroutine melt_iterate
+  !
+  subroutine melt_direct(s,q,dtb,aT,aS)
     !
-    ! wall-normal velocity at the interface
+    ! melt_xdiff = 'explicit': the y-operator (1 - c D2) is the same for every Fourier mode, so the wall
+    ! response R = aT (aS) and the unit response profile h(y) do not depend on kx, and in physical space
+    ! the new wall gradient is g(x) = g0(x) + R w(x) at every x. Exact, without iteration:
+    !   1. solve with zero wall values of theta and s  ->  s0, wall gradients g0;
+    !   2. solve the interface conditions at every x with g = g0 + R w  ->  w = theta_b, s_b; m*;
+    !   3. s = s0 + w(x) h(y)   (per mode: s_k = s0_k + w_k h).
+    ! melt_res reports max|g - (g0 + R w)| of the final fields (round-off).
     !
+    implicit none
+    complex(rp), intent(inout) :: s(nkx,ny,max(nscal,1))
+    integer , intent(in) :: q
+    real(rp), intent(in) :: dtb,aT,aS
+    integer :: i,r,it,is,ierr
+    real(rp) :: sig,dw
+    complex(rp) :: g1,g2,w1,w2
+    logical :: salt
+    it = melt_t; is = melt_s; salt = (is > 0); sig = melt_sigma
     !$acc parallel loop default(present) async(1)
     do i=1,nkx
-      if(blow) then
-        vbw(i) = mh(i,1,3)
-      else
-        vbw(i) = (0._rp,0._rp)
+      swb(i,it) = (0._rp,0._rp)
+      if(salt) swb(i,is) = (0._rp,0._rp)
+    end do
+    call scalar_solve(s,nscal,dtb,1._rp)
+    !$acc parallel loop gang vector default(present) private(g1,g2) async(1)
+    do i=1,nkx
+      g1 = (0._rp,0._rp); g2 = (0._rp,0._rp)
+      do r=1,nc1
+        g1 = g1 + c1(r)*s(i,r,it)
+      end do
+      wo(i,1) = g1                                        ! keep g0 for the check
+      if(salt) then
+        do r=1,nc1
+          g2 = g2 + c1(r)*s(i,r,is)
+        end do
+        wo(i,2) = g2
+        if(ismean(i)) g2 = g2 - aS*sig                    ! G of z = s + sigma
+      end if
+      do r=1,ny
+        mh(i,r,1) = (0._rp,0._rp); mh(i,r,2) = (0._rp,0._rp)
+      end do
+      mh(i,1,1) = g1; mh(i,1,2) = g2
+    end do
+    call interface_local(aT,aS)
+    !
+    ! superposition s = s0 + w h, wall values, and the check of the wall gradients
+    !
+    dw = 0._rp
+    !$acc parallel loop gang vector default(present) private(g1,g2,w1,w2) reduction(max:dw) async(1)
+    do i=1,nkx
+      w1 = mh(i,1,1)
+      swb(i,it) = w1
+      g1 = (0._rp,0._rp)
+      do r=1,ny
+        s(i,r,it) = s(i,r,it) + w1*hpr(r,1,q)
+        if(r <= nc1) g1 = g1 + c1(r)*s(i,r,it)
+      end do
+      dw = max(dw,abs(g1 - (wo(i,1) + aT*w1)))
+      if(salt) then
+        w2 = mh(i,1,2)
+        swb(i,is) = w2
+        g2 = (0._rp,0._rp)
+        do r=1,ny
+          s(i,r,is) = s(i,r,is) + w2*hpr(r,2,q)
+          if(r <= nc1) g2 = g2 + c1(r)*s(i,r,is)
+        end do
+        dw = max(dw,abs(g2 - (wo(i,2) + aS*w2)))
       end if
     end do
-  end subroutine melt_solve
+    !$acc wait(1)
+    call MPI_ALLREDUCE(MPI_IN_PLACE,dw,1,MPI_DOUBLE_PRECISION,MPI_MAX,MPI_COMM_WORLD,ierr)
+    melt_nit = 0; melt_res = dw
+  end subroutine melt_direct
+  !
+  subroutine interface_local(aT,aS)
+    !
+    ! on input row 1 of mh(:,:,1:2) holds G_theta and G_z (spectral); solves the interface conditions at
+    ! every x with the wall gradients G + a w_new (a = aT, aS), and returns theta_b, s_b and m* in row 1
+    ! of mh(:,:,1:3) (spectral)
+    !
+    implicit none
+    real(rp), intent(in) :: aT,aS
+    integer :: i,it,is
+    real(rp) :: kt,ks,st,lam,thf,sig,gth,gz,aa,bb,bq,cq,disc,z,sb,thb,mm
+    logical :: salt
+    it = melt_t; is = melt_s; salt = (is > 0)
+    kt = diff(it); ks = 0._rp
+    if(salt) ks = diff(is)
+    st = melt_st; lam = melt_lambda; thf = melt_thf; sig = melt_sigma
+    call bwd_fft(mh(:,:,1),mp(:,:,1))
+    call bwd_fft(mh(:,:,2),mp(:,:,2))
+    !
+    ! interface conditions at every x of the wall row (on the rank that holds it)
+    !
+    !$acc kernels default(present) async(1)
+    mp(:,:,3) = 0._rp
+    !$acc end kernels
+    if(yA_lo == 1) then
+      !$acc parallel loop default(present) async(1)
+      do i=1,mx
+        gth = mp(i,1,1); gz = mp(i,1,2)
+        if(salt) then
+          aa = st*kt*(gth + aT*(thf - lam*sig))
+          bb = st*kt*aT*lam
+          bq = aa - ks*aS
+          cq = ks*gz
+          if(bb > 0._rp) then
+            disc = max(bq*bq + 4._rp*bb*cq,0._rp)
+            if(bq >= 0._rp) then
+              if(bq + sqrt(disc) > 0._rp) then
+                z = 2._rp*cq/(bq + sqrt(disc))
+              else
+                z = 0._rp
+              end if
+            else
+              z = (-bq + sqrt(disc))/(2._rp*bb)
+            end if
+          else if(bq > 0._rp) then
+            z = cq/bq
+          else
+            z = 0._rp
+          end if
+          z = max(z,0._rp)
+          sb  = z - sig
+          thb = lam*sb + thf
+          mm  = aa + bb*z
+        else
+          thb = thf
+          sb  = 0._rp
+          mm  = st*kt*(gth + aT*thf)
+        end if
+        mp(i,1,1) = thb; mp(i,1,2) = sb; mp(i,1,3) = mm
+      end do
+    end if
+    call fwd_fft(mp(:,:,1),mh(:,:,1))
+    call fwd_fft(mp(:,:,2),mh(:,:,2))
+    call fwd_fft(mp(:,:,3),mh(:,:,3))
+  end subroutine interface_local
   !
   subroutine melt_means(mmean)
     ! x-averages of m*, theta_b and s_b (all ranks)

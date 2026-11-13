@@ -32,7 +32,7 @@ module mod_ysolve
                          cb1m => b1m,ct1mw => t1mw,ct1md => t1md,ct1mu => t1mu,crxi => rxi
   implicit none
   private
-  public :: init_ysolve,deriv1,deriv1m,add_lap,scalar_solve,divergence_max,wall_gradient,mean_gradient_max, &
+  public :: init_ysolve,deriv1,deriv1m,add_lap,add_kx2,scalar_solve,divergence_max,wall_gradient,mean_gradient_max, &
             mean_owner,i00,kxv,ismean, &
             init_vv,vv_state_from_velocity,vel_from_v,vv_rhs_terms,vv_step,vv_cfr
   real(rp), allocatable, public :: a1(:,:),b1(:,:),a2(:,:),b2(:,:)
@@ -50,7 +50,7 @@ module mod_ysolve
   ! batched scalar solve: per-scalar theta, diffusivity, wall values and Neumann flags; work arrays
   !
   integer :: nsb
-  real(rp), allocatable :: sth(:),sdf(:),sgb(:),sgt(:)
+  real(rp), allocatable :: sth(:),sdf(:),sgb(:),sgt(:),skf(:)   ! skf: 1, or 0 without kx^2 (explicit x-diffusion)
   logical , allocatable :: snb(:),snt(:)
   complex(rp), allocatable :: sxb(:,:)
   real(rp), allocatable :: ufb(:,:,:)
@@ -360,24 +360,39 @@ contains
     end do
   end subroutine deriv1m
   !
-  subroutine add_lap(f,nf,coef,tmp)
-    ! nf <- nf + coef*(D2 - kx^2) f
+  subroutine add_lap(f,nf,coef,tmp,kfac)
+    ! nf <- nf + coef*(D2 - kfac kx^2) f   (kfac = 1: Laplacian; 0: y-part only)
     implicit none
     complex(rp), intent(in) :: f(nkx,ny)
     complex(rp), intent(inout) :: nf(nkx,ny)
-    real(rp), intent(in) :: coef
+    real(rp), intent(in) :: coef,kfac
     complex(rp) :: tmp(nkx,ny)
     integer :: i,r
     real(rp) :: k2
     !$acc parallel loop gang vector default(present) private(k2) async(1)
     do i=1,nkx
-      k2 = kxv(i)**2
+      k2 = kfac*kxv(i)**2
       call dcol(nkx,ny,i,b2,t2w,t2d,t2u,f,tmp)
       do r=1,ny
         nf(i,r) = nf(i,r) + coef*(tmp(i,r) - k2*f(i,r))
       end do
     end do
   end subroutine add_lap
+  !
+  subroutine add_kx2(f,nf,coef)
+    ! nf <- nf - coef*kx^2 f   (x-diffusion treated explicitly)
+    implicit none
+    complex(rp), intent(in) :: f(nkx,ny)
+    complex(rp), intent(inout) :: nf(nkx,ny)
+    real(rp), intent(in) :: coef
+    integer :: i,r
+    !$acc parallel loop collapse(2) default(present) async(1)
+    do r=1,ny
+      do i=1,nkx
+        nf(i,r) = nf(i,r) - coef*kxv(i)**2*f(i,r)
+      end do
+    end do
+  end subroutine add_kx2
   !
   ! ---------------------------------------------------------------------------
   ! scalars
@@ -387,14 +402,15 @@ contains
     !
     ! per-scalar parameters of the batched scalar solve, constant during the run (on the device)
     !
-    use mod_param, only: nscal,scal_theta,diff,sbc_bot,sbc_top,sval_bot,sval_top
+    use mod_param, only: nscal,scal_theta,diff,sbc_bot,sbc_top,sval_bot,sval_top,sxexp
     implicit none
     integer :: n
     nsb = max(nscal,1)
-    allocate(sth(nsb),sdf(nsb),sgb(nsb),sgt(nsb),snb(nsb),snt(nsb))
-    sth = 0; sdf = 0; sgb = 0; sgt = 0; snb = .false.; snt = .false.
+    allocate(sth(nsb),sdf(nsb),sgb(nsb),sgt(nsb),snb(nsb),snt(nsb),skf(nsb))
+    sth = 0; sdf = 0; sgb = 0; sgt = 0; snb = .false.; snt = .false.; skf = 1
     do n=1,nscal
       sth(n) = scal_theta(n); sdf(n) = diff(n)
+      if(sxexp(n)) skf(n) = 0._rp
       sgb(n) = sval_bot(n)  ; sgt(n) = sval_top(n)
       snb(n) = (sbc_bot(n) == 'N'); snt(n) = (sbc_top(n) == 'N')
     end do
@@ -408,10 +424,10 @@ contains
         swb(i00,n) = sval_bot(n)
       end do
     end if
-    !$acc enter data copyin(sth,sdf,sgb,sgt,snb,snt,sxb,ufb,swb)
+    !$acc enter data copyin(sth,sdf,sgb,sgt,snb,snt,skf,sxb,ufb,swb)
   end subroutine init_scalar_solve
   !
-  subroutine scalar_solve(s,ns_,dtb)
+  subroutine scalar_solve(s,ns_,dtb,topfac)
     !
     ! theta-method for all scalars at once:  [ (1 + c kx^2) I - c D2 ] s_n = r_n  at interior points,
     ! c = theta_n*dtb*kappa_n, with Dirichlet ('D', s = g) or Neumann ('N', D1 s = g) conditions at
@@ -430,6 +446,7 @@ contains
     integer , intent(in) :: ns_
     complex(rp), intent(inout) :: s(nkx,ny,ns_)
     real(rp), intent(in) :: dtb
+    real(rp), intent(in) :: topfac       ! 1; 0 for homogeneous wall conditions at y = ly (unit responses)
     integer :: i,n,ic,r,m,q,p,l,nh,ncol
     real(rp) :: k2,c,ca,cb,gb,gt
     complex(rp) :: e(4,5),zz(4),f,t,ra1,ran,zero
@@ -441,12 +458,12 @@ contains
       do i=1,nkx
         ic = i + nkx*(n-1)
         c  = sth(n)*dtb*sdf(n)
-        gb = sgb(n); gt = sgt(n)
+        gb = sgb(n); gt = topfac*sgt(n)
         isnb = snb(n); isnt = snt(n)
         isd  = .not.(isnb.or.isnt)
         nh = 3
         if(.not.isd) nh = 5
-        k2 = kxv(i)**2
+        k2 = skf(n)*kxv(i)**2                 ! 0 for scalars with explicit x-diffusion
         ca = 1._rp + c*k2
         cb = -c
         ra1 = a2(1,1)*s(i,2,n)

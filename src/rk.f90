@@ -15,7 +15,7 @@ module mod_rk
   use mod_fields
   use mod_fft    , only: fwd_fft,bwd_fft
   use mod_timer  , only: tic,toc,tm_nl,tm_dt,tm_vsolve,tm_ssolve
-  use mod_ysolve , only: deriv1,deriv1m,add_lap,scalar_solve,kxv,mean_owner,i00,mean_gradient_max, &
+  use mod_ysolve , only: deriv1,deriv1m,add_lap,add_kx2,scalar_solve,kxv,mean_owner,i00,mean_gradient_max, &
                          vv_rhs_terms,vv_step,vv_cfr,phv
   use mod_compact, only: kappa1,lam2max
   use mod_melt   , only: melt_solve
@@ -177,7 +177,11 @@ contains
       end if
       call fwd_fft(ap,ns(:,:,n))
       if(fa < 1._rp) call add_flux_div(s(:,:,n),ns(:,:,n),fa-1._rp,skew)
-      if(scal_theta(n) == 0._rp) call add_lap(s(:,:,n),ns(:,:,n),diff(n),tmp1)
+      if(scal_theta(n) == 0._rp) then
+        call add_lap(s(:,:,n),ns(:,:,n),diff(n),tmp1,1._rp)    ! diffusion explicit (RK3)
+      else if(sxexp(n)) then
+        call add_kx2(s(:,:,n),ns(:,:,n),diff(n))              ! x-diffusion explicit (RK3)
+      end if
     end do
     !
     ! momentum
@@ -260,6 +264,12 @@ contains
     else
       dtv = huge(1._rp)
     end if
+    ! explicit x-diffusion of the melt scalars (melt_xdiff = 'explicit')
+    nmax = 0._rp
+    do n=1,nscal
+      if(sxexp(n) .and. scal_theta(n) > 0._rp) nmax = max(nmax,diff(n))
+    end do
+    if(nmax > 0._rp) dtv = min(dtv,cfl_visc/(nmax*kxm**2))
     compute_dt = min(dta,dtv,dt_max)
     do n=1,nscal
       if(ri(n) /= 0._rp) then
@@ -285,14 +295,15 @@ contains
     end do
   end subroutine update
   !
-  subroutine rhs_theta(f,nf,nfo,dtg,dtz,cexp)
+  subroutine rhs_theta(f,nf,nfo,dtg,dtz,cexp,kfac)
     !
-    !   f <- f + dtg*nf + dtz*nfo + cexp*(D2 - kx^2) f ,   nfo <- nf
+    !   f <- f + dtg*nf + dtz*nfo + cexp*(D2 - kfac kx^2) f ,   nfo <- nf
+    !   (kfac = 0: the x-diffusion is in nf, explicit)
     !
     implicit none
     complex(rp), intent(inout) :: f(nkx,ny),nfo(nkx,ny)
     complex(rp), intent(in) :: nf(nkx,ny)
-    real(rp), intent(in) :: dtg,dtz,cexp
+    real(rp), intent(in) :: dtg,dtz,cexp,kfac
     integer :: i,k
     !$acc parallel loop collapse(2) default(present) async(1)
     do k=1,ny
@@ -301,7 +312,7 @@ contains
         nfo(i,k)  = nf(i,k)
       end do
     end do
-    if(cexp /= 0._rp) call add_lap(f,tmp2,cexp,tmp1)
+    if(cexp /= 0._rp) call add_lap(f,tmp2,cexp,tmp1,kfac)
     !$acc parallel loop collapse(2) default(present) async(1)
     do k=1,ny
       do i=1,nkx
@@ -348,7 +359,7 @@ contains
       do n=1,nscal
         th = scal_theta(n)
         if(th > 0._rp) then
-          call rhs_theta(s(:,:,n),ns(:,:,n),nso(:,:,n),dtg,dtz,(1._rp-th)*dtb*diff(n))
+          call rhs_theta(s(:,:,n),ns(:,:,n),nso(:,:,n),dtg,dtz,(1._rp-th)*dtb*diff(n),merge(0._rp,1._rp,sxexp(n)))
         else
           call update(s(:,:,n),ns(:,:,n),nso(:,:,n),dtg,dtz)
         end if
@@ -358,14 +369,14 @@ contains
         if(melt) then
           call melt_solve(s,q,dtb)
         else
-          call scalar_solve(s,nscal,dtb)
+          call scalar_solve(s,nscal,dtb,1._rp)
         end if
         call toc(tm_ssolve)
       end if
       !
       ! velocity: (I - b dt L) phi = (I + a dt L) phi^q + dt (gam h + zet h_old)
       !
-      call rhs_theta(phv,nv,nvo,dtg,dtz,rk_asmr(q)*dtcur*visc)
+      call rhs_theta(phv,nv,nvo,dtg,dtz,rk_asmr(q)*dtcur*visc,1._rp)
       c = rk_bsmr(q)*dtcur*visc
       call tic(tm_vsolve)
       call vv_step(u,v,q,c)

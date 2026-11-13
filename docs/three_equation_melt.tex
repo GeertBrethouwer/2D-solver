@@ -195,7 +195,7 @@ conduction into the ice is neglected ($q_i=0$).
 and are nonlinear ($m^* s_b$) and coupled ($\theta$ and $s$). $\theta_b(x)$ and $s_b(x)$ are imposed as
 Dirichlet values on all Fourier modes of the (batched) scalar solves of each Runge--Kutta substep.
 
-\paragraph{Implicit coupling.} The conditions must hold with the wall gradients of the \emph{new}
+\paragraph{Implicit coupling (\texttt{melt\_xdiff = 'implicit'}).} The conditions must hold with the wall gradients of the \emph{new}
 scalars. Lagging the interior values by one substep is unstable when diffusion across the first grid
 cell within a time step is fast, $\kappa\,\Delta t/\Delta y_1^2 \gtrsim 1$. The theta-method solve is
 linear in its wall value $w$: for every Fourier mode $k$ the new wall gradient is
@@ -215,6 +215,24 @@ substep and $\Delta t$. The coupled problem is solved by the iteration
 At convergence the conditions hold exactly with the new gradients ($R_{\mathrm{ref}}$ cancels). For mode
 $k$ the error is multiplied by at most $|1-R_k/R_{\mathrm{ref}}|$, which is below 1 for
 $R_{\mathrm{ref}} = (\min_k R_k + \max_k R_k)/2$ whatever the time step.
+
+\paragraph{Exact coupling without iteration (default).} The iteration is needed only because $R_k$
+depends on $k$, through the implicit $x$-diffusion term $c\,k^2$ of the $\theta$-method, while the
+nonlinear local conditions couple the Fourier modes. With \texttt{melt\_xdiff = 'explicit'} the
+$x$-diffusion $-\kappa k^2 s$ of $\theta$ and $s$ is advanced explicitly with the RK3 weights, and only
+the $y$-diffusion is implicit. The $y$-operator $1 - c\,D_2$ is then the same for every mode, so the
+response $R$ and the unit response profile $h(y)$ ($(1-cD_2)h=0$, $h(0)=1$, homogeneous condition at
+$y=L_y$) do not depend on $k$, and in physical space
+\begin{equation}
+  g(x) = g^0(x) + R\, w(x)
+\end{equation}
+holds at every $x$. The condition is then imposed exactly in one pass per substep: (i) solve with zero
+wall values, which gives $s^0$ and $g^0$; (ii) solve the local problem below with $a_T=R_\theta$,
+$a_S=R_s$ and $G=g^0$; (iii) set $s = s^0 + w(x)\,h(y)$, i.e.\ $\hat s_k = \hat s^0_k + \hat w_k\, h$ for
+every mode. The cost is one scalar solve per substep instead of one per iteration. The explicit
+$x$-diffusion adds the RK3 stability limit $\Delta t \le 2.5/(\kappa\, k_{x,\max}^2)$ (with the safety
+factor \texttt{cfl\_visc}); since $\Delta x$ is much larger than the near-wall $\Delta y$, this is
+usually much weaker than the limits that apply anyway.
 
 \paragraph{Local problem.} With $a_T$, $a_S$ the values of $R_{\mathrm{ref}}$ for $\theta$ and $s$,
 $z = s_b+\sigma$ and $G_z = G_s - a_S\sigma$, equations

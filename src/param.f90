@@ -96,6 +96,10 @@ module mod_param
   real(rp) :: melt_thf = 0._rp              ! liquidus offset theta_f = (lambda_1 S_ref + lambda_2 - T_ref)/Delta T
   real(rp) :: melt_sigma = 0._rp            ! sigma = (S_ref - S_ice)/Delta S
   logical  :: melt_blowing = .true.         ! v = m* at the interface (Wells & Worster 2011, Eq. 3.5a)
+  character(len=8) :: melt_xdiff = 'explicit' ! x-diffusion of the temperature and salinity:
+                                            ! 'explicit' (RK3; the y-solve is then the same for all Fourier
+                                            ! modes and the melt condition is imposed exactly without
+                                            ! iteration) or 'implicit' (theta-method; iterative coupling)
   integer  :: melt_maxit = 50               ! max. iterations of the implicit interface coupling per substep
   real(rp) :: melt_tol = 1.e-12_rp          ! convergence: max change of the interface values (theta, s units)
   !
@@ -109,6 +113,7 @@ module mod_param
   real(rp) :: diff(nscal_max)
   real(rp) :: gvec(2) = 0._rp              ! unit vector in the direction of gravity
   logical  :: is_buoyant = .false.         ! at least one active scalar
+  logical  :: sxexp(nscal_max) = .false.   ! scalar with explicit x-diffusion (melt_xdiff = 'explicit')
   !
   ! low-storage RK3 of Spalart, Moser & Rogers (1991): nonlinear weights gam, zet and the
   ! implicit/explicit split of the viscous terms (I - b_q dt L) f^{q+1} = (I + a_q dt L) f^q + ...
@@ -131,7 +136,8 @@ contains
                       mode_log_kx,timing
     namelist /scalars/ nscal,pr,scal_theta,sbc_bot,sbc_top,sval_bot,sval_top,ssrc_const,ssrc_u,sinit,scal_form
     namelist /buoyancy/ gravity,ri
-    namelist /melt_model/ melt,melt_t,melt_s,melt_st,melt_lambda,melt_thf,melt_sigma,melt_blowing,melt_maxit,melt_tol
+    namelist /melt_model/ melt,melt_t,melt_s,melt_st,melt_lambda,melt_thf,melt_sigma,melt_blowing,melt_xdiff, &
+                          melt_maxit,melt_tol
     !
     open(newunit=iunit,file='input.nml',status='old',action='read',iostat=ios)
     if(ios /= 0) call abort_run('cannot open input.nml')
@@ -186,6 +192,11 @@ contains
       if(melt_st < 0._rp) call abort_run('&melt_model: melt_st must be >= 0')
       if(melt_lambda > 0._rp) call abort_run('&melt_model: melt_lambda must be <= 0')
       if(melt_maxit < 1 .or. melt_tol <= 0._rp) call abort_run('&melt_model: melt_maxit >= 1, melt_tol > 0')
+      if(all(melt_xdiff /= ['explicit','implicit'])) call abort_run("&melt_model: melt_xdiff must be 'explicit' or 'implicit'")
+      if(melt_xdiff == 'explicit') then
+        sxexp(melt_t) = .true.
+        if(melt_s > 0) sxexp(melt_s) = .true.
+      end if
     end if
     if(all(scal_form /= ['advective ','divergence','skew      '])) &
       call abort_run("scal_form must be 'advective', 'divergence' or 'skew'")
@@ -264,7 +275,11 @@ contains
                                         ', salinity: scalar ',melt_s
         write(*,fr) '  St, Lambda, theta_f, sigma',melt_st,melt_lambda,melt_thf,melt_sigma
         write(*,f1) '  meltwater velocity v(0) = m*',merge('yes','no ',melt_blowing)
-        write(*,'(1x,a,t36,i0,es12.4)') '  coupling: max. it., tolerance',melt_maxit,melt_tol
+        if(melt_xdiff == 'explicit') then
+          write(*,f1) '  coupling','exact (x-diffusion of theta, s explicit, RK3)'
+        else
+          write(*,'(1x,a,t36,i0,es12.4)') '  iterative: max. it., tol.',melt_maxit,melt_tol
+        end if
       end if
       write(*,'(a)') ' ===================================================================================='
     end subroutine print_setup

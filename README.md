@@ -113,19 +113,29 @@ v(x,0)  = m*(x),  u(x,0) = 0                   meltwater velocity (melt_blowing;
 * `examples/ice_layer/input.nml` shows how to obtain St, Λ, θ_f and σ for sea water.
 
 **Implicit coupling.** The interface values are the Dirichlet values of the scalar solves of each RK
-substep. The conditions must hold with the wall gradients of the *new* scalars.
-* The theta-method solve is linear in the wall value. For every Fourier mode k, the new wall gradient
-  is g0_k + R_k w_k, where R_k < 0 is the response to a unit wall value. R_k is computed with the solver
-  itself and cached per substep and Δt.
-* Each iteration solves all scalars with the current θ_b(x) and s_b(x). It then re-solves the local
-  conditions at every x, where they reduce to a quadratic for the interface salinity with exactly one
-  physical root.
-* The constant R_ref = (min R_k + max R_k)/2 replaces R_k in that local step, so the iteration converges
-  for every mode whatever Δt. At convergence (`melt_tol`) the conditions hold exactly.
-* In the tests it took 1–7 iterations per substep, logged in `log.dat`. Each costs one batched scalar solve
-  and five x-FFTs.
-* The scalars are solved before the velocity in each substep. The velocity then uses m* as its wall value
-  at y = 0.
+substep. The conditions must hold with the wall gradients of the *new* scalars. The theta-method solve is
+linear in the wall value: for every Fourier mode k, the new wall gradient is g0_k + R_k w_k, where R_k < 0
+is the response to a unit wall value. R_k is computed with the solver itself and cached per substep and Δt.
+At every x the local conditions reduce to a quadratic for the interface salinity with exactly one physical
+root. Two variants (`melt_xdiff`):
+
+* **`'explicit'` (default): exact, without iteration.**
+  * The x-diffusion −κk_x²s of θ and s is advanced explicitly with RK3; the y-diffusion stays implicit.
+  * The y-operator 1 − cD2 is then the same for every mode, so R and the unit response profile h(y) do
+    not depend on k_x, and g(x) = g0(x) + R w(x) holds at every x.
+  * Per substep: one solve with zero wall values, the local quadratic at every x, and s = s0 + w(x) h(y).
+  * `log.dat` shows 0 iterations and, as `melt_res`, the check max|g − (g0 + R w)| (round-off).
+  * New time-step limit Δt ≤ `cfl_visc`/(κ k_x,max²). It is mild: Δx is much larger than the near-wall Δy.
+* **`'implicit'`: iterative.**
+  * The x-diffusion is in the θ-method, and R_k depends on k_x.
+  * Each iteration solves all scalars with the current θ_b(x), s_b(x) and re-solves the local
+    conditions, with R_ref = (min R_k + max R_k)/2 in place of R_k.
+  * It converges for every mode whatever Δt; at convergence (`melt_tol`) the conditions hold exactly.
+  * In the tests: 1–7 iterations per substep, each one batched scalar solve and five x-FFTs.
+
+In a convection test both variants agreed to all printed digits; `'explicit'` made the scalar solves 3.2×
+and the whole time step 1.8× faster. The scalars are solved before the velocity in each substep, and the
+velocity uses m* as its wall value at y = 0.
 
 **Mean outflow.** In 2D the mean meltwater velocity is the same at every y (continuity). So it leaves the
 domain through y = `ly`, where the mean wall-normal velocity equals the mean of m*. With `melt_blowing =
@@ -233,7 +243,7 @@ Use `timing = .true.` to see where the time goes.
 | `&output` | `data_dir`, `iout_log`, `iout_stats`, `iout_save_stats`, `iout_restart`, `iout_field`, `tstats_start`, `mode_log_kx`, `timing` |
 | `&scalars` | `nscal` (default 2); per scalar `pr(n)`, `scal_theta(n)`, `sbc_bot(n)`/`sbc_top(n)` (`D`/`N`), `sval_bot(n)`/`sval_top(n)`, `ssrc_const(n)`, `ssrc_u(n)`, `sinit(n)` (`linear`/`zero`/`one`/`noise`); `scal_form` (`advective`/`divergence`/`skew`) |
 | `&buoyancy` | `gravity` (x, y direction), `ri(n)` (Richardson number per scalar, 0 = passive) |
-| `&melt_model` | `melt`, `melt_t`, `melt_s` (temperature and salinity scalars; `melt_s = 0`: Stefan), `melt_st` (St), `melt_lambda` (Λ), `melt_thf` (θ_f), `melt_sigma` (σ), `melt_blowing`, `melt_maxit`, `melt_tol` |
+| `&melt_model` | `melt`, `melt_t`, `melt_s` (temperature and salinity scalars; `melt_s = 0`: Stefan), `melt_st` (St), `melt_lambda` (Λ), `melt_thf` (θ_f), `melt_sigma` (σ), `melt_blowing`, `melt_xdiff` (`explicit`/`implicit`), `melt_maxit`, `melt_tol` |
 
 The adaptive time step obeys the advective CFL limit, the explicit-diffusion limit (scalars with θ < ½), and
 the internal-gravity-wave limit `Δt ≤ cfl/N`, with `N² = |ri| max|dS/dy|`. It is kept piecewise constant,
@@ -313,6 +323,8 @@ python3 tools/plot_field.py data 8000 s1 s2 v --scmap acton --cmap vik --srange 
 | Free-slip, nonlinear two-scalar case | bit-identical on 1 and 4 ranks; OpenACC host build agrees to 8e-14; ∂u/∂y at the free-slip wall converges to 0 with refinement (0.25, 0.019, 0.0017 for ny = 49, 97, 193, vs ~6.3 at the no-slip wall) |
 | Melting, steady Stefan problem (no salinity, St = 0.5, ice at y = 0, θ = 1 at y = 1) | m* = κ ln(1 + St) to 6e-9; temperature profile (e^{Vy/κ} − 1)/(e^{V/κ} − 1) to 3e-10; v = m* uniform |
 | Melting, steady three-equation problem (St = 0.5, Λ = −0.5, κ_T = 1, κ_S = 0.5) | m*, θ_b, s_b to 1.4e-8, 3.9e-8, 3.9e-8 (ny = 65) and 1.6e-9, 4.6e-9 (ny = 129), against the exact solution (exponential profiles, root of one equation); 1–2 coupling iterations per substep at steady state |
+| Melting, exact one-pass coupling (`melt_xdiff = 'explicit'`): the same steady tests | Stefan 5.7e-9; three-equation 1.4e-8 / 1.6e-9 (ny = 65 / 129), as with the iteration; no iterations; check of the wall gradients at round-off (1e-14) |
+| Melting, `'explicit'` vs `'implicit'`, convection under ice | identical to all printed digits; scalar solves 3.2× and time step 1.8× faster; `'explicit'` bit-identical on 1 and 3 ranks, restart (2 → 4 ranks) to 2e-14, OpenACC host build to 8e-14, `DEBUG=1` clean |
 | Melting, convection under ice (sea-water-like Λ, θ_f, St; Pr = 7, Sc = 50; 128 × 97) | stable, 3–4 coupling iterations per substep; Crank–Nicolson and θ = 1 agree; bit-identical on 1 and 3 ranks; restart (2 → 4 ranks) to 7e-14; OpenACC host build to 6e-14; `DEBUG=1` clean |
 | Runs without melting after the change | bit-identical |
 | Salt fingers, R_ρ = 1.2, Pr = 7, Sc = 21 (`examples/salt_fingers`, 256 × 129) | fingers grow from noise and saturate; wall flux of salt ×3.3 and of heat ×2.3 the conductive value; divergence ~1e-5 (wall rows) |

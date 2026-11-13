@@ -99,6 +99,9 @@
   melt_thf = 0.0           ! liquidus offset theta_f = (lambda_1 S_ref + lambda_2 - T_ref)/Delta T
   melt_sigma = 0.0         ! sigma = (S_ref - S_ice)/Delta S
   melt_blowing = .true.    ! meltwater velocity v(y=0) = m* (melt rate as a water velocity)
-  melt_maxit = 50          ! max. iterations of the implicit interface coupling per RK substep
-  melt_tol = 1.e-12        ! convergence: max. change of the interface values
+  melt_xdiff = 'explicit'  ! x-diffusion of theta and s: 'explicit' (RK3; the melt condition is then imposed
+                           ! exactly without iteration; time-step limit cfl_visc/(kappa kx_max^2)) or
+                           ! 'implicit' (theta-method; iterative coupling, melt_maxit, melt_tol)
+  melt_maxit = 50          ! 'implicit': max. iterations of the interface coupling per RK substep
+  melt_tol = 1.e-12        ! 'implicit': convergence, max. change of the interface values
 /

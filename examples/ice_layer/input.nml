@@ -68,4 +68,5 @@
   melt_thf = 0.5                       ! liquidus offset (lambda_1 S_ref + lambda_2 - T_ref)/Delta T
   melt_sigma = 0.0                     ! (S_ref - S_ice)/Delta S
   melt_blowing = .true.                ! meltwater velocity v(0) = m*
+  melt_xdiff = 'explicit'              ! exact coupling without iteration (x-diffusion of theta, s by RK3)
 /
