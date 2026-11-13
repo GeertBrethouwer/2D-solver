@@ -9,6 +9,7 @@ module mod_stats
   use mod_decomp , only: myid,nkx,kx_lo
   use mod_ysolve , only: wq,mean_owner,i00,wall_gradient
   use mod_compact, only: yg
+  use mod_melt   , only: melt_means,melt_nit,melt_res
   implicit none
   private
   public :: init_stats,accumulate_stats,write_stats,log_line,mode_energy,profile_mean
@@ -165,7 +166,7 @@ contains
     complex(rp), intent(in) :: u(nkx,ny),v(nkx,ny)
     complex(rp), intent(in), contiguous :: s(:,:,:)
     real(rp) :: um(ny),uu(ny),vv(ny),ub,gb,gt,tauw,retau,ekin,em
-    real(rp) :: buf(2+2*nscal_max)
+    real(rp) :: buf(2+2*nscal_max),mmean(3)
     integer :: n,ierr
     call profile_mean(u,1._rp,um)
     call correlation(u,u,1._rp,uu)
@@ -191,11 +192,13 @@ contains
     retau = sqrt(tauw)*merge(hgt,hhalf,freeslip_bot.or.freeslip_top)/visc
     em = 0._rp
     if(mode_log_kx >= 0) em = mode_energy(u,v,mode_log_kx)
+    if(melt) call melt_means(mmean)
     if(myid == 0) then
       write(iunit,'(i9,6es14.6,es11.3,2es14.6)',advance='no') istep,time,dtcur,ub,dpdx_app,tauw,retau,divm,ekin,em
       do n=1,nscal
         write(iunit,'(2es14.6)',advance='no') buf(2+2*n-1),buf(2+2*n)
       end do
+      if(melt) write(iunit,'(3es14.6,i9,es11.3)',advance='no') mmean(:),melt_nit,melt_res
       write(iunit,*)
       flush(iunit)
     end if

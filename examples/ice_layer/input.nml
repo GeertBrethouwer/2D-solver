@@ -1,18 +1,28 @@
 !======================================================================================================
-!  TEMPLATE: water below an ice layer, with temperature and salinity as active scalars.
+!  TEMPLATE: water below a melting ice layer, with temperature and salinity as active scalars and the
+!  three-equation melt condition at the ice (docs/three_equation_melt.tex, &melt_model).
 !    y = 0  : the ice (top), no-slip, grid refined here           bc_bot = 'noslip'
 !    y = ly : the bottom of the domain, free-slip, coarse grid     bc_top = 'freeslip'
 !    gravity = (0, +1): y points downward, away from the ice
 !  ('bot'/'top' in the input always mean y = 0 / y = ly, whatever the direction of gravity.)
-!    scalar 1 = temperature: freezing temperature 0 at the ice, 1 at y = ly; ri(1) > 0 (warm water is
-!               lighter, linear equation of state): warm water below cold -> convection
-!    scalar 2 = salinity: fresh meltwater 0 at the ice, 1 at y = ly; ri(2) < 0 (salty water is heavier):
-!               stabilising
-!  Ra_T = ri(1) dT ly^3 re^2 Pr = 7e4, Ra_S = |ri(2)| dS ly^3 re^2 Sc = 4e4 (here ly = 1).
-!  The parameter values are placeholders: set re, Pr, Sc, ri, the wall values and the resolution for
-!  your problem. The ice-water interface is a fixed wall with prescribed scalar values: the melt rate,
-!  the interface motion and the meltwater flux (Stefan / three-equation conditions) are not modelled,
-!  and the equation of state is linear (no density maximum near 4 C).
+!
+!  Scalings (example: sea water, Delta T = 4 K, S_inf = 35 psu, liquidus T_f = lambda_1 S + lambda_2):
+!    scalar 1: theta = (T - T_f(S_inf))/Delta T   (0: far-field freezing point; 1 at y = ly)
+!    scalar 2: s     = S/S_inf                    (S_ref = S_ice = 0 -> sigma = 0; 1 in the far field)
+!    Lambda  = lambda_1 S_inf/Delta T ~ -0.057*35/4 = -0.5,   theta_f = -Lambda = 0.5
+!              (theta_b = Lambda (s_b - 1): theta_b = 0 for s_b = 1)
+!    St      = c_w Delta T/L_f = 3974*4/3.34e5 = 0.048
+!  ri(1) > 0: warm water is lighter (linear equation of state); ri(2) < 0: salty water is heavier.
+!  The parameter values are placeholders: set re, Pr, Sc (here reduced to 50), ri and the resolution
+!  for your problem.
+!
+!  With melt_blowing the meltwater leaves the ice with v(0) = m*. In 2D its mean flows through the whole
+!  column and out at y = ly. The ice interface is fixed (it recedes slowly), and heat conduction into the
+!  ice is neglected. The equation of state is linear (no density maximum near 4 C).
+!
+!  Crank-Nicolson (scal_theta = 0.5) rings after abrupt changes at the interface, e.g. from an initial
+!  state that does not satisfy the melt condition; this shows as an oscillating melt rate m*.
+!  scal_theta = 1 (implicit Euler, first order in time) damps it; it can be used to start a run.
 !======================================================================================================
 &grid
   nx = 256, ny = 129
@@ -39,11 +49,23 @@
 /
 &scalars
   nscal = 2, scal_form = 'skew'
-  pr(1) = 7.0,  sbc_bot(1) = 'D', sval_bot(1) = 0.0, sbc_top(1) = 'D', sval_top(1) = 1.0, sinit(1) = 'noise'
-  pr(2) = 70.0, sbc_bot(2) = 'D', sval_bot(2) = 0.0, sbc_top(2) = 'D', sval_top(2) = 1.0, sinit(2) = 'linear'
+  ! the wall values at y = 0 (sval_bot) are replaced by the melt condition; they must be Dirichlet ('D')
+  pr(1) = 7.0,  scal_theta(1) = 0.5, sbc_bot(1) = 'D', sval_bot(1) = 0.0, sbc_top(1) = 'D', sval_top(1) = 1.0
+  sinit(1) = 'noise'
+  pr(2) = 50.0, scal_theta(2) = 0.5, sbc_bot(2) = 'D', sval_bot(2) = 1.0, sbc_top(2) = 'D', sval_top(2) = 1.0
+  sinit(2) = 'one'
 /
 &buoyancy
   gravity = 0.0, 1.0                   ! towards increasing y (away from the ice)
   ri(1) =  0.01                        ! temperature: warm water is lighter
-  ri(2) = -0.00057                     ! salinity: salty water is heavier
+  ri(2) = -0.01                        ! salinity: salty water is heavier
+/
+&melt_model
+  melt = .true.
+  melt_t = 1, melt_s = 2               ! temperature and salinity scalars (melt_s = 0: Stefan condition)
+  melt_st = 0.048                      ! Stefan number c_w Delta T/L_f
+  melt_lambda = -0.5                   ! liquidus slope lambda_1 Delta S/Delta T
+  melt_thf = 0.5                       ! liquidus offset (lambda_1 S_ref + lambda_2 - T_ref)/Delta T
+  melt_sigma = 0.0                     ! (S_ref - S_ice)/Delta S
+  melt_blowing = .true.                ! meltwater velocity v(0) = m*
 /

@@ -20,6 +20,8 @@ output files and GPU design are the same as in HiCHAN, with the spanwise directi
   `bc_top` for y = `ly`; at most one free-slip), e.g. for an open channel or water under an ice layer. The
   default grid is refined at every no-slip wall: at both walls, or only at the no-slip one.
   "bot"/"top" in the input always mean y = 0 / y = `ly`, whatever the direction of gravity.
+* **Melting ice:** the three-equation melt condition (liquidus, heat and salt balances) at an ice wall at
+  y = 0, with the meltwater velocity at the interface (`&melt_model`, see *Melting ice* below).
 * **Parallelisation:** MPI with one rank per GPU, OpenACC kernels and cuFFT, made for one NSC Arrhenius node
   (4 × NVIDIA GH200). The same source runs on CPUs with FFTW.
 
@@ -89,6 +91,57 @@ The discretisation is the one of HiCHAN's `'vv'` option:
   one-sided derivative (`vv_neumann = 'explicit'`) or the compact boundary row (`'compact'`). With
   `'explicit'`, `div_max` in `log.dat` shows the truncation-size wall-row value.
 
+## Melting ice
+
+`&melt_model` with `melt = .true.` turns the wall y = 0 into a melting ice interface. The full derivation
+and a comparison with Wells & Worster (2011) are in `docs/three_equation_melt.tex` (PDF next to it). Heat
+conduction into the ice is neglected.
+
+**The conditions**, at every x and in the units of the code:
+
+```
+theta_b = Lambda s_b + theta_f                 liquidus
+m*      = St kappa_T dtheta/dy|_0              heat:  latent heat = conductive heat flux from the water
+kappa_S ds/dy|_0 = m* (s_b + sigma)            salt:  diffusive flux = dilution by the meltwater
+v(x,0)  = m*(x),  u(x,0) = 0                   meltwater velocity (melt_blowing; interface fixed at y = 0)
+```
+
+* m* = ρ_i m/(ρ_w U) is the melt rate as a water velocity, and κ = 1/(Re Pr).
+* θ = scalar `melt_t` and s = scalar `melt_s`. Both need `sbc_bot = 'D'`; their `sval_bot` are replaced
+  by θ_b(x) and s_b(x).
+* `melt_s = 0` gives the Stefan condition (θ_b = θ_f).
+* `examples/ice_layer/input.nml` shows how to obtain St, Λ, θ_f and σ for sea water.
+
+**Implicit coupling.** The interface values are the Dirichlet values of the scalar solves of each RK
+substep. The conditions must hold with the wall gradients of the *new* scalars.
+* The theta-method solve is linear in the wall value. For every Fourier mode k, the new wall gradient
+  is g0_k + R_k w_k, where R_k < 0 is the response to a unit wall value. R_k is computed with the solver
+  itself and cached per substep and Δt.
+* Each iteration solves all scalars with the current θ_b(x) and s_b(x). It then re-solves the local
+  conditions at every x, where they reduce to a quadratic for the interface salinity with exactly one
+  physical root.
+* The constant R_ref = (min R_k + max R_k)/2 replaces R_k in that local step, so the iteration converges
+  for every mode whatever Δt. At convergence (`melt_tol`) the conditions hold exactly.
+* In the tests it took 1–7 iterations per substep, logged in `log.dat`. Each costs one batched scalar solve
+  and five x-FFTs.
+* The scalars are solved before the velocity in each substep. The velocity then uses m* as its wall value
+  at y = 0.
+
+**Mean outflow.** In 2D the mean meltwater velocity is the same at every y (continuity). So it leaves the
+domain through y = `ly`, where the mean wall-normal velocity equals the mean of m*. With `melt_blowing =
+.false.` the ice wall stays impermeable.
+
+**Time stepping.** Crank–Nicolson (`scal_theta = 0.5`) rings after abrupt changes at the interface, e.g.
+from an initial state that does not satisfy the melt condition; m* then oscillates from step to step and the
+oscillation decays slowly on fine grids. `scal_theta = 1` (implicit Euler, first order in time) damps it, and
+can be used to start a run (then restart with 0.5).
+
+**Not modelled:**
+* the motion of the interface (it recedes slowly and is kept fixed at y = 0);
+* heat conduction into the ice;
+* a nonlinear equation of state (the density maximum of fresh water near 4 °C);
+* the pressure dependence of the freezing point.
+
 ## Contents
 
 ```
@@ -98,6 +151,7 @@ src/compact.f90    grid, compact-scheme coefficients on non-uniform grids, quadr
 src/decomp.f90     1D (slab) decomposition, x-lines <-> y-lines transpose (MPI_Alltoallv, CUDA-aware)
 src/fft.f90        x-transforms (cuFFT / FFTW), dealiasing
 src/ysolve.f90     wall-normal column solvers: derivatives, scalar Helmholtz, velocity-vorticity step
+src/melt.f90       three-equation melt condition at an ice wall, coupled implicitly to the scalar solves
 src/rk.f90         nonlinear terms (rotational or advective), buoyancy, RK3 step, time-step limit
 src/fields.f90     field storage
 src/stats.f90      statistics (Parseval, spectral space), log.dat
@@ -107,8 +161,8 @@ src/timer.f90      optional timers
 src/main.f90       main program
 configs/           arrhenius.mk, generic_gpu.mk
 examples/          input_reference.nml (every input item), ts_wave, rayleigh_benard (two active scalars),
-                   rayleigh_benard_freeslip (free-slip bottom wall), ice_layer (template: water under ice,
-                   no-slip refined wall at y = 0, free-slip at y = ly, gravity +y),
+                   rayleigh_benard_freeslip (free-slip bottom wall), ice_layer (template: water under
+                   melting ice: three-equation condition at y = 0, free-slip at y = ly, gravity +y),
                    salt_fingers (two scalars with opposite buoyancy), salt_fingers_gpu (production-size
                    template for one Arrhenius node), arrhenius_job.sh
 tools/             os_mode.py (Orr–Sommerfeld mode for init_type = 'mode'; needs numpy, scipy),
@@ -179,6 +233,7 @@ Use `timing = .true.` to see where the time goes.
 | `&output` | `data_dir`, `iout_log`, `iout_stats`, `iout_save_stats`, `iout_restart`, `iout_field`, `tstats_start`, `mode_log_kx`, `timing` |
 | `&scalars` | `nscal` (default 2); per scalar `pr(n)`, `scal_theta(n)`, `sbc_bot(n)`/`sbc_top(n)` (`D`/`N`), `sval_bot(n)`/`sval_top(n)`, `ssrc_const(n)`, `ssrc_u(n)`, `sinit(n)` (`linear`/`zero`/`one`/`noise`); `scal_form` (`advective`/`divergence`/`skew`) |
 | `&buoyancy` | `gravity` (x, y direction), `ri(n)` (Richardson number per scalar, 0 = passive) |
+| `&melt_model` | `melt`, `melt_t`, `melt_s` (temperature and salinity scalars; `melt_s = 0`: Stefan), `melt_st` (St), `melt_lambda` (Λ), `melt_thf` (θ_f), `melt_sigma` (σ), `melt_blowing`, `melt_maxit`, `melt_tol` |
 
 The adaptive time step obeys the advective CFL limit, the explicit-diffusion limit (scalars with θ < ½), and
 the internal-gravity-wave limit `Δt ≤ cfl/N`, with `N² = |ri| max|dS/dy|`. It is kept piecewise constant,
@@ -200,6 +255,9 @@ with wall difference Δs is `Ra = ri Δs ly³ re² pr` (`8 ri Δs re² pr` for `
   9. fluctuation energy
   10. energy of mode `mode_log_kx`
   11. onwards: dS/dy at the bottom and top wall, for each scalar
+  12. with melting, after the scalars: x-averages of the melt rate m*, θ_b and s_b, the number of coupling
+      iterations in the last substep, and the last change of the interface values
+* **`melt_NNNNNNN.dat`** (with melting, at every field output): x, m*, θ_b, s_b along the interface.
 * **`stats.dat`**: time-averaged profiles U, V, ⟨u′u′⟩, ⟨v′v′⟩, ⟨u′v′⟩, and per scalar S, ⟨s′s′⟩, ⟨u′s′⟩,
   ⟨v′s′⟩.
 * **`restart.bin` / `restart.hdr`**: u, v and the scalars as global (nx/2, ny) complex arrays, independent of
@@ -253,6 +311,10 @@ python3 tools/plot_field.py data 8000 s1 s2 v --scmap acton --cmap vik --srange 
 | Mirror test: nonlinear two-scalar run (`ly` = 2.5, oblique gravity, Neumann scalar wall, source) with the free-slip wall at y = 0, against the mirrored set-up with the free-slip wall at y = `ly` (gravity, wall values and Neumann gradients mirrored), 200 steps, 2 vs 3 ranks | mirror images to round-off (≤ 3e-14); identical −dp/dx and τ_w |
 | Rayleigh–Bénard onset, free-slip wall at y = `ly` | Ra_c = 1100.59 (as with the free-slip wall at y = 0; theory 1100.65) |
 | Free-slip, nonlinear two-scalar case | bit-identical on 1 and 4 ranks; OpenACC host build agrees to 8e-14; ∂u/∂y at the free-slip wall converges to 0 with refinement (0.25, 0.019, 0.0017 for ny = 49, 97, 193, vs ~6.3 at the no-slip wall) |
+| Melting, steady Stefan problem (no salinity, St = 0.5, ice at y = 0, θ = 1 at y = 1) | m* = κ ln(1 + St) to 6e-9; temperature profile (e^{Vy/κ} − 1)/(e^{V/κ} − 1) to 3e-10; v = m* uniform |
+| Melting, steady three-equation problem (St = 0.5, Λ = −0.5, κ_T = 1, κ_S = 0.5) | m*, θ_b, s_b to 1.4e-8, 3.9e-8, 3.9e-8 (ny = 65) and 1.6e-9, 4.6e-9 (ny = 129), against the exact solution (exponential profiles, root of one equation); 1–2 coupling iterations per substep at steady state |
+| Melting, convection under ice (sea-water-like Λ, θ_f, St; Pr = 7, Sc = 50; 128 × 97) | stable, 3–4 coupling iterations per substep; Crank–Nicolson and θ = 1 agree; bit-identical on 1 and 3 ranks; restart (2 → 4 ranks) to 7e-14; OpenACC host build to 6e-14; `DEBUG=1` clean |
+| Runs without melting after the change | bit-identical |
 | Salt fingers, R_ρ = 1.2, Pr = 7, Sc = 21 (`examples/salt_fingers`, 256 × 129) | fingers grow from noise and saturate; wall flux of salt ×3.3 and of heat ×2.3 the conductive value; divergence ~1e-5 (wall rows) |
 
 The TS-wave and Rayleigh–Bénard checks:

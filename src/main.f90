@@ -23,6 +23,7 @@ program solver2d
   use mod_io
   use mod_initflow
   use mod_timer
+  use mod_melt
   implicit none
   integer :: ierr,istep,istep0,ilog,n,nf
   real(rp) :: time,dtcur,divm,t0,t1,tstep,twall0
@@ -43,6 +44,7 @@ program solver2d
   call init_vv
   call init_rk
   call init_stats
+  if(melt) call init_melt
   if(myid == 0) then
     call execute_command_line('mkdir -p '//trim(data_dir))
     write(*,'(a)')        ' --------------------------------------------------------------'
@@ -80,6 +82,7 @@ program solver2d
       write(ilog,'(a,i0,a,i0)',advance='no') '      dS',n,'dy_b      dS',n
       write(ilog,'(a)',advance='no') 'dy_t'
     end do
+    if(melt) write(ilog,'(a)',advance='no') '      m*_mean   theta_b_mean     s_b_mean  melt_it   melt_res'
     write(ilog,*)
   end if
   divm = divergence_max(u,v,tmp1)
@@ -164,5 +167,6 @@ contains
       call bwd_fft(s(:,:,n),ap); call write_field(istep,names(2+n),ap)
     end do
     call write_xdmf(istep,time,names,yg)
+    if(melt) call melt_output(istep)
   end subroutine output_fields
 end program solver2d

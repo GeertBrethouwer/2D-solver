@@ -83,6 +83,22 @@ module mod_param
   real(rp) :: gravity(2) = [0._rp,-1._rp]        ! direction of gravity (x,y), normalised internally
   real(rp) :: ri(nscal_max) = 0._rp              ! Richardson number of scalar n (0 -> passive scalar)
   !
+  ! &melt: three-equation melt condition at an ice interface at the wall y = 0 (docs/three_equation_melt.tex),
+  ! heat conduction into the ice neglected:
+  !   theta_b = Lambda s_b + theta_f,  m* = St kappa_T dtheta/dy,  kappa_S ds/dy = m* (s_b + sigma)
+  ! m* = rho_i m/(rho_w U) is the melt rate as a water velocity; with melt_blowing, v(y=0) = m*
+  !
+  logical  :: melt = .false.
+  integer  :: melt_t = 1                    ! scalar that is the temperature theta
+  integer  :: melt_s = 2                    ! scalar that is the salinity s (0: no salinity -> Stefan condition)
+  real(rp) :: melt_st = 0._rp               ! Stefan number St = c_w Delta T/L_f
+  real(rp) :: melt_lambda = 0._rp           ! liquidus slope Lambda = lambda_1 Delta S/Delta T (<= 0)
+  real(rp) :: melt_thf = 0._rp              ! liquidus offset theta_f = (lambda_1 S_ref + lambda_2 - T_ref)/Delta T
+  real(rp) :: melt_sigma = 0._rp            ! sigma = (S_ref - S_ice)/Delta S
+  logical  :: melt_blowing = .true.         ! v = m* at the interface (Wells & Worster 2011, Eq. 3.5a)
+  integer  :: melt_maxit = 50               ! max. iterations of the implicit interface coupling per substep
+  real(rp) :: melt_tol = 1.e-12_rp          ! convergence: max change of the interface values (theta, s units)
+  !
   ! derived quantities
   !
   integer  :: nxh, mx                      ! number of kx modes kept; physical (dealiased) grid size
@@ -115,6 +131,7 @@ contains
                       mode_log_kx,timing
     namelist /scalars/ nscal,pr,scal_theta,sbc_bot,sbc_top,sval_bot,sval_top,ssrc_const,ssrc_u,sinit,scal_form
     namelist /buoyancy/ gravity,ri
+    namelist /melt_model/ melt,melt_t,melt_s,melt_st,melt_lambda,melt_thf,melt_sigma,melt_blowing,melt_maxit,melt_tol
     !
     open(newunit=iunit,file='input.nml',status='old',action='read',iostat=ios)
     if(ios /= 0) call abort_run('cannot open input.nml')
@@ -131,6 +148,8 @@ contains
     read(iunit,nml=scalars ,iostat=ios); if(ios > 0 ) call abort_run('error reading namelist &scalars')
     rewind(iunit)
     read(iunit,nml=buoyancy,iostat=ios); if(ios > 0 ) call abort_run('error reading namelist &buoyancy')
+    rewind(iunit)
+    read(iunit,nml=melt_model,iostat=ios); if(ios > 0 ) call abort_run('error reading namelist &melt_model')
     close(iunit)
     !
     if(mod(nx,2) /= 0 .or. nx < 4) call abort_run('nx must be even and >= 4')
@@ -154,6 +173,19 @@ contains
     if(nscal > 0) then
       if(any(sinit(1:nscal) /= 'linear' .and. sinit(1:nscal) /= 'zero' .and. sinit(1:nscal) /= 'one' .and. &
              sinit(1:nscal) /= 'noise')) call abort_run("sinit must be 'linear', 'zero', 'one' or 'noise'")
+    end if
+    if(melt) then
+      if(freeslip_bot) call abort_run('&melt_model: the ice wall y = 0 must be no-slip (bc_bot)')
+      if(melt_t < 1 .or. melt_t > nscal) call abort_run('&melt_model: melt_t must be a scalar index')
+      if(sbc_bot(melt_t) /= 'D') call abort_run('&melt_model: sbc_bot of the temperature must be D')
+      if(melt_s /= 0) then
+        if(melt_s < 1 .or. melt_s > nscal .or. melt_s == melt_t) &
+          call abort_run('&melt_model: melt_s must be 0 or another scalar index')
+        if(sbc_bot(melt_s) /= 'D') call abort_run('&melt_model: sbc_bot of the salinity must be D')
+      end if
+      if(melt_st < 0._rp) call abort_run('&melt_model: melt_st must be >= 0')
+      if(melt_lambda > 0._rp) call abort_run('&melt_model: melt_lambda must be <= 0')
+      if(melt_maxit < 1 .or. melt_tol <= 0._rp) call abort_run('&melt_model: melt_maxit >= 1, melt_tol > 0')
     end if
     if(all(scal_form /= ['advective ','divergence','skew      '])) &
       call abort_run("scal_form must be 'advective', 'divergence' or 'skew'")
@@ -227,6 +259,13 @@ contains
           ', top ',sbc_top(n),' = ',sval_top(n),', Ri = ',ri(n)
       end do
       if(is_buoyant) write(*,fr) 'gravity direction (unit vector)',gvec
+      if(melt) then
+        write(*,'(1x,a,t36,a,i0,a,i0)') 'melting ice at y = 0','temperature: scalar ',melt_t, &
+                                        ', salinity: scalar ',melt_s
+        write(*,fr) '  St, Lambda, theta_f, sigma',melt_st,melt_lambda,melt_thf,melt_sigma
+        write(*,f1) '  meltwater velocity v(0) = m*',merge('yes','no ',melt_blowing)
+        write(*,'(1x,a,t36,i0,es12.4)') '  coupling: max. it., tolerance',melt_maxit,melt_tol
+      end if
       write(*,'(a)') ' ===================================================================================='
     end subroutine print_setup
   end subroutine read_input

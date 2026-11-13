@@ -54,6 +54,11 @@ module mod_ysolve
   logical , allocatable :: snb(:),snt(:)
   complex(rp), allocatable :: sxb(:,:)
   real(rp), allocatable :: ufb(:,:,:)
+  ! Dirichlet values of the scalars at the wall y = 0, per Fourier mode (nkx,nsb): the constant sval_bot
+  ! in the mean mode, or the interface values of the melt model (mod_melt) in all modes
+  complex(rp), allocatable, public :: swb(:,:)
+  ! wall-normal velocity at y = 0 per Fourier mode (nkx): zero, or the melt (blowing) velocity
+  complex(rp), allocatable, public :: vbw(:)
   !
   ! velocity-vorticity method
   !
@@ -396,7 +401,14 @@ contains
     ! work arrays: one column per (kx, scalar) pair, column index ic = i + nkx*(n-1)
     allocate(sxb(nkx*nsb,ny),ufb(nkx*nsb,ny,0:nbw))
     sxb = 0; ufb = 0
-    !$acc enter data copyin(sth,sdf,sgb,sgt,snb,snt,sxb,ufb)
+    allocate(swb(nkx,nsb))
+    swb = 0
+    if(mean_owner) then
+      do n=1,nscal
+        swb(i00,n) = sval_bot(n)
+      end do
+    end if
+    !$acc enter data copyin(sth,sdf,sgb,sgt,snb,snt,sxb,ufb,swb)
   end subroutine init_scalar_solve
   !
   subroutine scalar_solve(s,ns_,dtb)
@@ -451,10 +463,8 @@ contains
               end do
             end do
             sxb(ic,1) = zero; sxb(ic,ny) = zero
-            if(ismean(i)) then
-              if(.not.isnb) sxb(ic,1)  = gb
-              if(.not.isnt) sxb(ic,ny) = gt
-            end if
+            if(.not.isnb) sxb(ic,1) = swb(i,n)
+            if(ismean(i) .and. .not.isnt) sxb(ic,ny) = gt
           else
             do r=1,ny
               sxb(ic,r) = zero
@@ -548,10 +558,8 @@ contains
         sxb(ic,ny-1) = sxb(ic,ny-1) + zz(2)*a2( 1,ny-1)
         sxb(ic,1)  = zz(3)
         sxb(ic,ny) = zz(4)
-        if(ismean(i)) then
-          if(.not.isnb) sxb(ic,1)  = gb
-          if(.not.isnt) sxb(ic,ny) = gt
-        end if
+        if(.not.isnb) sxb(ic,1) = swb(i,n)
+        if(ismean(i) .and. .not.isnt) sxb(ic,ny) = gt
         call bsolve(ncol,ny,ic,klh,kuh,ca,cb,a2,b2,.true.,.true.,sxb,ufb)
         do r=1,ny
           s(i,r,n) = sxb(ic,r)
@@ -633,7 +641,9 @@ contains
     implicit none
     integer :: i,l
     real(rp) :: h(4)
-    allocate(phv(nkx,ny),wa(nkx,ny),wb(nkx,ny))
+    allocate(phv(nkx,ny),wa(nkx,ny),wb(nkx,ny),vbw(nkx))
+    vbw = 0
+    !$acc enter data copyin(vbw)
     allocate(hinv_c(4,nkx,3),ginv_v(4,nkx,3),hinv_v(4,nkx))
     phv = 0; wa = 0; wb = 0; hinv_c = 0; ginv_v = 0; hinv_v = 0
     !$acc enter data copyin(phv,wa,wb,hinv_c,ginv_v,hinv_v)
@@ -847,7 +857,7 @@ contains
         call hsolve_mean(nkx,ny,i,klh,kuh,ca,cb,a2,b2,h,phv,sx,wa,wb,uf,c1,nc1,cn,ncn,fsb,fst)
         do r=1,ny
           phv(i,r) = sx(i,r)
-          u(i,r) = sx(i,r); v(i,r) = zero
+          u(i,r) = sx(i,r); v(i,r) = vbw(i)    ! mean v: zero, or the mean melt velocity
         end do
       else
         do l=1,4
@@ -860,7 +870,7 @@ contains
         do r=1,ny
           psi(i,r) = -sx(i,r)
         end do
-        call hsolve_ab(nkx,ny,i,klh,kuh,k2,-1._rp,a2,b2,hv,psi,wa,uf,zero,zero)
+        call hsolve_ab(nkx,ny,i,klh,kuh,k2,-1._rp,a2,b2,hv,psi,wa,uf,vbw(i),zero)
         d1 = zero; dn = zero
         do r=1,ndw1
           d1 = d1 + dw1(r)*wa(i,r)
@@ -876,7 +886,7 @@ contains
           psi(i,r) = -sx(i,r)
           phv(i,r) = sx(i,r)
         end do
-        call hsolve_ab(nkx,ny,i,klh,kuh,k2,-1._rp,a2,b2,hv,psi,v,uf,zero,zero)
+        call hsolve_ab(nkx,ny,i,klh,kuh,k2,-1._rp,a2,b2,hv,psi,v,uf,vbw(i),zero)
         !
         ! u from continuity: i kx u + D1 v = 0
         !

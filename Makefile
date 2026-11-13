@@ -28,7 +28,7 @@ BUILDDIR := build
 EXE      := $(BUILDDIR)/solver2d
 
 SRCS := types.f90 param.f90 compact.f90 decomp.f90 timer.f90 fft.f90 ysolve.f90 fields.f90 \
-        rk.f90 stats.f90 io.f90 initflow.f90 main.f90
+        melt.f90 rk.f90 stats.f90 io.f90 initflow.f90 main.f90
 OBJS := $(addprefix $(BUILDDIR)/,$(SRCS:.f90=.o))
 
 LIBS :=
@@ -73,11 +73,12 @@ $(BUILDDIR)/timer.o:    $(BUILDDIR)/decomp.o
 $(BUILDDIR)/fft.o:      $(BUILDDIR)/decomp.o $(BUILDDIR)/timer.o
 $(BUILDDIR)/ysolve.o:   $(BUILDDIR)/decomp.o $(BUILDDIR)/compact.o
 $(BUILDDIR)/fields.o:   $(BUILDDIR)/decomp.o
-$(BUILDDIR)/rk.o:       $(BUILDDIR)/fields.o $(BUILDDIR)/fft.o $(BUILDDIR)/ysolve.o $(BUILDDIR)/timer.o
-$(BUILDDIR)/stats.o:    $(BUILDDIR)/ysolve.o
+$(BUILDDIR)/melt.o:     $(BUILDDIR)/fft.o $(BUILDDIR)/ysolve.o
+$(BUILDDIR)/rk.o:       $(BUILDDIR)/fields.o $(BUILDDIR)/fft.o $(BUILDDIR)/ysolve.o $(BUILDDIR)/timer.o $(BUILDDIR)/melt.o
+$(BUILDDIR)/stats.o:    $(BUILDDIR)/ysolve.o $(BUILDDIR)/melt.o
 $(BUILDDIR)/io.o:       $(BUILDDIR)/decomp.o
 $(BUILDDIR)/initflow.o: $(BUILDDIR)/ysolve.o $(BUILDDIR)/fields.o
-$(BUILDDIR)/main.o:     $(BUILDDIR)/timer.o $(BUILDDIR)/rk.o $(BUILDDIR)/stats.o $(BUILDDIR)/io.o $(BUILDDIR)/initflow.o
+$(BUILDDIR)/main.o:     $(BUILDDIR)/melt.o $(BUILDDIR)/timer.o $(BUILDDIR)/rk.o $(BUILDDIR)/stats.o $(BUILDDIR)/io.o $(BUILDDIR)/initflow.o
 
 clean:
 	rm -rf $(BUILDDIR)

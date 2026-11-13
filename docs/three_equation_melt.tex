@@ -183,32 +183,75 @@ The new non-dimensional parameters are $St$, $\Lambda$, $\theta_f$, $\sigma$ (an
 \texttt{solver2d} the buoyancy enters through the Richardson numbers \texttt{ri(1)}, \texttt{ri(2)}
 of $\theta$ and $s$, and the diffusivities through \texttt{pr(1)} $=Pr$ and \texttt{pr(2)} $=Sc$.
 
-\section{Use as a boundary condition (not yet implemented)}
+\section{Implementation in \texttt{solver2d}}
 
-The conditions hold at every point $x$ of the interface and are nonlinear ($m^* s_b$) and coupled
-($\theta$ and $s$). A practical implementation in \texttt{solver2d}:
+The model is switched on with \texttt{melt = .true.} in \texttt{\&melt\_model} (source:
+\texttt{src/melt.f90}). The parameters are $St$ (\texttt{melt\_st}), $\Lambda$ (\texttt{melt\_lambda}),
+$\theta_f$ (\texttt{melt\_thf}) and $\sigma$ (\texttt{melt\_sigma}). The scalars \texttt{melt\_t} and
+\texttt{melt\_s} are $\theta$ and $s$; with \texttt{melt\_s = 0} the Stefan condition is used. Heat
+conduction into the ice is neglected ($q_i=0$).
+
+\paragraph{Interface values as wall values.} The conditions hold at every point $x$ of the interface,
+and are nonlinear ($m^* s_b$) and coupled ($\theta$ and $s$). $\theta_b(x)$ and $s_b(x)$ are imposed as
+Dirichlet values on all Fourier modes of the (batched) scalar solves of each Runge--Kutta substep.
+
+\paragraph{Implicit coupling.} The conditions must hold with the wall gradients of the \emph{new}
+scalars. Lagging the interior values by one substep is unstable when diffusion across the first grid
+cell within a time step is fast, $\kappa\,\Delta t/\Delta y_1^2 \gtrsim 1$. The theta-method solve is
+linear in its wall value $w$: for every Fourier mode $k$ the new wall gradient is
+\begin{equation}
+  g_k = g^0_k + R_k\, w_k ,
+\end{equation}
+where $R_k<0$ is the response of the wall gradient to a unit wall value. $R_k$ is computed with the
+solver itself (zero right-hand side, unit wall value), for $\theta$ and $s$ separately, and cached per
+substep and $\Delta t$. The coupled problem is solved by the iteration
 \begin{enumerate}
-  \item At each Runge--Kutta substep, evaluate $\partial\theta/\partial y|_b$ and
-        $\partial s/\partial y|_b$ in physical space (all $x$), from the current fields.
-  \item At each $x$, solve \eqref{eq:nd-liquidus}--\eqref{eq:nd-salt} for $\theta_b$, $s_b$, $m^*$,
-        e.g.\ with the linearised wall gradients of Sec.~3, which gives the quadratic
-        \eqref{eq:quadratic} at every point.
-  \item Transform $\theta_b(x)$ and $s_b(x)$ to Fourier space and impose them as Dirichlet values
-        on all Fourier modes in the (batched) scalar solve. The code currently imposes wall values on
-        the mean mode only, so this needs per-mode wall values.
-  \item Lag the condition by one substep, or iterate it within the substep; the interface values
-        change slowly compared with the flow.
-  \item Impose the wall-normal velocity $v(0,x) = m^*(x)$, $u(0,x)=0$ (instead of $u=v=0$). In the
-        velocity--vorticity solver this is an inhomogeneous Dirichlet value of $v$ at the wall,
-        handled by the same superposition as the other wall conditions.
-  \item Mass conservation: in 2D the mean ($k_x=0$) part of continuity gives $\partial \bar v/\partial y=0$,
-        so the mean blowing velocity $\bar v = \overline{m^*}$ is the same at every $y$. The wall
-        $y=L_y$ must then let this flux out ($\bar v(L_y)=\overline{m^*}$, an outflow) instead of
-        being impermeable; at present \texttt{solver2d} has $\bar v\equiv 0$. Equivalently, the
-        whole water column moves away from the ice at $\overline{m^*}$, as the far field does in
-        the frame of the interface.
-  \item Output the melt rate $m^*(x,t)$ and its average.
+  \item solve all scalars with the current wall values $w=(\theta_b,s_b)$ and evaluate the wall
+        gradients $g$ (first row of the compact $D_1$);
+  \item form $G = g - R_{\mathrm{ref}}\, w$ with a constant $R_{\mathrm{ref}}$ per scalar, and solve at
+        every $x$ the local conditions with the wall gradient $G + R_{\mathrm{ref}}\, w^{\mathrm{new}}$;
+  \item repeat until $\max|w^{\mathrm{new}}-w| < $ \texttt{melt\_tol}.
 \end{enumerate}
+At convergence the conditions hold exactly with the new gradients ($R_{\mathrm{ref}}$ cancels). For mode
+$k$ the error is multiplied by at most $|1-R_k/R_{\mathrm{ref}}|$, which is below 1 for
+$R_{\mathrm{ref}} = (\min_k R_k + \max_k R_k)/2$ whatever the time step.
+
+\paragraph{Local problem.} With $a_T$, $a_S$ the values of $R_{\mathrm{ref}}$ for $\theta$ and $s$,
+$z = s_b+\sigma$ and $G_z = G_s - a_S\sigma$, equations
+\eqref{eq:nd-liquidus}--\eqref{eq:nd-salt} reduce at every $x$ to
+\begin{equation}
+  B z^2 + (A - \kappa_S a_S)\, z - \kappa_S G_z = 0, \qquad
+  A = St\,\kappa_T\left[G_\theta + a_T(\theta_f - \Lambda\sigma)\right], \quad
+  B = St\,\kappa_T\, a_T \Lambda \ge 0 ,
+\end{equation}
+with $\kappa_T = 1/(Re\,Pr)$, $\kappa_S = 1/(Re\,Sc)$. Its roots have opposite signs ($a<0$,
+$\Lambda\le 0$, $G_z>0$ for positive salinity in the water): the physical root is the non-negative one.
+Then $s_b = z-\sigma$, $\theta_b = \Lambda s_b + \theta_f$ and $m^* = A + Bz$. The local problem is solved
+in physical space (dealiased grid) and the results are transformed back to Fourier space.
+
+\paragraph{Velocity.} The scalars are solved before the velocity in each substep, and the velocity
+solve uses $v(0,x) = m^*(x)$, $u(0,x)=0$ (\texttt{melt\_blowing}), an inhomogeneous wall value of $v$
+handled by the same superposition as the other wall conditions. In 2D the mean ($k_x=0$) part of
+continuity gives $\partial \bar v/\partial y=0$, so the mean meltwater velocity
+$\bar v = \overline{m^*}$ is the same at every $y$ and leaves the domain at $y=L_y$: the whole water
+column moves away from the ice at $\overline{m^*}$, as the far field does in the frame of the interface.
+
+\paragraph{Output.} \texttt{log.dat} gives the $x$-averages of $m^*$, $\theta_b$ and $s_b$ and the
+number of coupling iterations; \texttt{melt\_NNNNNNN.dat} gives $m^*(x)$, $\theta_b(x)$, $s_b(x)$ at
+every field output.
+
+\paragraph{Validation.} Steady melting has exact solutions in the frame of the interface. With the
+meltwater velocity $V=m^*$ the profiles are exponential:
+$\theta = \theta_b + (\theta_t-\theta_b)(e^{Vy/\kappa_T}-1)/(e^{VL_y/\kappa_T}-1)$ and, since the
+total salt flux vanishes, $z = z_b\, e^{Vy/\kappa_S}$. The heat condition then gives
+$1 = St\,(\theta_t - \theta_b)/(e^{VL_y/\kappa_T}-1)$; without salt, $V = (\kappa_T/L_y)\ln(1+St)$.
+The code reproduces these to the discretisation error (relative $6\times10^{-9}$ for $m^*$ in the
+Stefan case; $1.4\times10^{-8}$ and $1.6\times10^{-9}$ on 65 and 129 points for the three-equation case).
+
+\paragraph{Time stepping.} Crank--Nicolson ($\theta$-method with $\theta=1/2$) is not L-stable: after an
+abrupt change at the interface, e.g.\ from an initial state that does not satisfy the melt condition, the
+wall gradient and hence $m^*$ oscillate from step to step, and the oscillation decays slowly on fine
+grids. The implicit Euler method (\texttt{scal\_theta = 1}) damps it and can be used to start a run.
 
 \section{Comparison with Wells \& Worster (2011)}
 

@@ -18,6 +18,7 @@ module mod_rk
   use mod_ysolve , only: deriv1,deriv1m,add_lap,scalar_solve,kxv,mean_owner,i00,mean_gradient_max, &
                          vv_rhs_terms,vv_step,vv_cfr,phv
   use mod_compact, only: kappa1,lam2max
+  use mod_melt   , only: melt_solve
   implicit none
   private
   public :: init_rk,rk_step,dpdx_applied
@@ -338,20 +339,11 @@ contains
       dtz = rk_zet(q)*dtcur
       dtb = rk_bet(q)*dtcur
       !
-      ! velocity: (I - b dt L) phi = (I + a dt L) phi^q + dt (gam h + zet h_old)
-      !
-      call rhs_theta(phv,nv,nvo,dtg,dtz,rk_asmr(q)*dtcur*visc)
-      c = rk_bsmr(q)*dtcur*visc
-      call tic(tm_vsolve)
-      call vv_step(u,v,q,c)
-      if(forcing == 'cfr') then
-        call vv_cfr(u,ubulk,dpe,dtb,c,q)
-        if(q == 3) dpdx_applied = dpe
-      end if
-      call toc(tm_vsolve)
-      !
       ! scalars: r = s + dt(gam N + zet N_old) + (1-theta) beta dt kappa Lap(s) for each scalar,
-      ! then the theta-solves of all scalars in one batched kernel (c_n = theta_n beta dt kappa_n)
+      ! then the theta-solves of all scalars in one batched kernel (c_n = theta_n beta dt kappa_n).
+      ! With melting ice at y = 0 the interface values theta_b, s_b and the melt velocity m* are
+      ! coupled implicitly to these solves (mod_melt). The scalars are solved before the velocity,
+      ! which then uses m* as its wall value; the two solves are otherwise independent.
       !
       do n=1,nscal
         th = scal_theta(n)
@@ -363,9 +355,25 @@ contains
       end do
       if(nscal > 0) then
         call tic(tm_ssolve)
-        call scalar_solve(s,nscal,dtb)
+        if(melt) then
+          call melt_solve(s,q,dtb)
+        else
+          call scalar_solve(s,nscal,dtb)
+        end if
         call toc(tm_ssolve)
       end if
+      !
+      ! velocity: (I - b dt L) phi = (I + a dt L) phi^q + dt (gam h + zet h_old)
+      !
+      call rhs_theta(phv,nv,nvo,dtg,dtz,rk_asmr(q)*dtcur*visc)
+      c = rk_bsmr(q)*dtcur*visc
+      call tic(tm_vsolve)
+      call vv_step(u,v,q,c)
+      if(forcing == 'cfr') then
+        call vv_cfr(u,ubulk,dpe,dtb,c,q)
+        if(q == 3) dpdx_applied = dpe
+      end if
+      call toc(tm_vsolve)
     end do
     !$acc wait(1)
     time = time + dtcur
