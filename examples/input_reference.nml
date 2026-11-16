@@ -63,6 +63,7 @@
   iout_restart = 5000      ! write restart files (also at the end of the run)
   iout_field = 0           ! write physical 2D fields (fld_*.bin + .xmf for ParaView), 0 = never
   tstats_start = 0.0
+  stats_restart = .true.   ! 'restart': continue the time average stored with the restart file (restart.stats)
   mode_log_kx = -1         ! >= 0: energy of this Fourier mode in column 10 of log.dat
   timing = .false.         ! timers: report at the end (data_dir/timing_report.txt)
 /

@@ -43,22 +43,23 @@
 ! physical root is the non-negative one. Then s_b = z - sigma, theta_b = Lambda s_b + theta_f,
 ! m* = A + B z. Without salinity (melt_s = 0): theta_b = theta_f, m* = St kappa_T (G_theta + a_T theta_f)
 ! (Stefan condition). The products are formed in physical space (dealiased grid), on the rank that
-! holds the wall row.
+! holds the wall row; only that row is transformed.
 !
 module mod_melt
   use mpi
   use mod_types
   use mod_param
   use mod_decomp , only: myid,nkx,nyA,yA_lo
-  use mod_fft    , only: fwd_fft,bwd_fft
+  use mod_fft    , only: row_fwd,row_bwd
   use mod_ysolve , only: c1,ismean,mean_owner,i00,swb,vbw,scalar_solve
   use mod_compact, only: nc1
   implicit none
   private
   public :: init_melt,melt_solve,melt_means,melt_output,melt_nit,melt_res
   integer :: nsb
-  complex(rp), allocatable :: mh(:,:,:)   ! (nkx,ny,3) spectral work; row 1 holds theta_b, s_b, m* after melt_solve
-  real(rp)   , allocatable :: mp(:,:,:)   ! (mx,nyA,3) physical work
+  complex(rp), allocatable :: wh(:,:)     ! (nkx,3) spectral wall row: theta_b, s_b, m* after melt_solve
+  real(rp)   , allocatable :: wp(:,:)     ! (mx,3) physical wall row (on the rank that holds it)
+  integer :: nwarn = 0                    ! warnings about the iterative coupling printed so far
   complex(rp), allocatable :: mr(:,:,:)   ! (nkx,ny,nsb) right-hand sides of the scalar solves (kept for the iteration)
   complex(rp), allocatable :: mt(:,:,:)   ! (nkx,ny,nsb) work field for the wall response
   complex(rp), allocatable :: wo(:,:)     ! (nkx,2) previous iterate of the wall values
@@ -70,10 +71,25 @@ module mod_melt
 contains
   subroutine init_melt
     implicit none
+    real(rp) :: kd,dtlim
+    character(len=256) :: msg
     nsb = max(nscal,1)
-    allocate(mh(nkx,ny,3),mp(mx,nyA,3),mr(nkx,ny,nsb),mt(nkx,ny,nsb),wo(nkx,2),resp(nkx,2,3),hpr(ny,2,3))
-    mh = 0; mp = 0; mr = 0; mt = 0; wo = 0; resp = 0; hpr = 0
-    !$acc enter data copyin(mh,mp,mr,mt,wo,resp,hpr)
+    allocate(wh(nkx,3),wp(mx,3),mr(nkx,ny,nsb),mt(nkx,ny,nsb),wo(nkx,2),resp(nkx,2,3),hpr(ny,2,3))
+    wh = 0; wp = 0; mr = 0; mt = 0; wo = 0; resp = 0; hpr = 0
+    !$acc enter data copyin(wh,wp,mr,mt,wo,resp,hpr)
+    !
+    ! a fixed time step must respect the RK3 limit of the explicit x-diffusion of theta and s
+    !
+    if(fixed_dt .and. melt_xdiff == 'explicit') then
+      kd = diff(melt_t)
+      if(melt_s > 0) kd = max(kd,diff(melt_s))
+      dtlim = 2.51_rp/(kd*(pi*nx/lx)**2)
+      if(dt > dtlim) then
+        write(msg,'(a,es10.3,a)') "&melt_model: the fixed dt exceeds the stability limit ",dtlim, &
+          " of the explicit x-diffusion (melt_xdiff = 'explicit'); reduce dt or use melt_xdiff = 'implicit'"
+        call abort_run(trim(msg))
+      end if
+    end if
   end subroutine init_melt
   !
   subroutine wall_response(q,dtb)
@@ -170,7 +186,7 @@ contains
     !$acc parallel loop default(present) async(1)
     do i=1,nkx
       if(blow) then
-        vbw(i) = mh(i,1,3)
+        vbw(i) = wh(i,3)
       else
         vbw(i) = (0._rp,0._rp)
       end if
@@ -231,10 +247,7 @@ contains
           if(ismean(i)) g2 = g2 - aS*sig
           wo(i,2) = swb(i,is)
         end if
-        do r=1,ny
-          mh(i,r,1) = (0._rp,0._rp); mh(i,r,2) = (0._rp,0._rp)
-        end do
-        mh(i,1,1) = g1; mh(i,1,2) = g2
+        wh(i,1) = g1; wh(i,2) = g2
       end do
       call interface_local(aT,aS)
       !
@@ -243,11 +256,11 @@ contains
       dw = 0._rp
       !$acc parallel loop default(present) reduction(max:dw) async(1)
       do i=1,nkx
-        swb(i,it) = mh(i,1,1)
-        dw = max(dw,abs(mh(i,1,1)-wo(i,1)))
+        swb(i,it) = wh(i,1)
+        dw = max(dw,abs(wh(i,1)-wo(i,1)))
         if(salt) then
-          swb(i,is) = mh(i,1,2)
-          dw = max(dw,abs(mh(i,1,2)-wo(i,2)))
+          swb(i,is) = wh(i,2)
+          dw = max(dw,abs(wh(i,2)-wo(i,2)))
         end if
       end do
       !$acc wait(1)
@@ -255,6 +268,11 @@ contains
       melt_nit = iter; melt_res = dw
       if(dw < melt_tol) exit
     end do
+    if(dw >= melt_tol .and. nwarn < 10) then
+      nwarn = nwarn+1
+      if(myid == 0) write(*,'(a,i0,a,es9.2,a)') ' WARNING: melt coupling not converged after ',melt_maxit, &
+        ' iterations (change of the interface values ',dw,'); see melt_it and melt_res in log.dat'
+    end if
   end subroutine melt_iterate
   !
   subroutine melt_direct(s,q,dtb,aT,aS)
@@ -296,10 +314,7 @@ contains
         wo(i,2) = g2
         if(ismean(i)) g2 = g2 - aS*sig                    ! G of z = s + sigma
       end if
-      do r=1,ny
-        mh(i,r,1) = (0._rp,0._rp); mh(i,r,2) = (0._rp,0._rp)
-      end do
-      mh(i,1,1) = g1; mh(i,1,2) = g2
+      wh(i,1) = g1; wh(i,2) = g2
     end do
     call interface_local(aT,aS)
     !
@@ -308,7 +323,7 @@ contains
     dw = 0._rp
     !$acc parallel loop gang vector default(present) private(g1,g2,w1,w2) reduction(max:dw) async(1)
     do i=1,nkx
-      w1 = mh(i,1,1)
+      w1 = wh(i,1)
       swb(i,it) = w1
       g1 = (0._rp,0._rp)
       do r=1,ny
@@ -317,7 +332,7 @@ contains
       end do
       dw = max(dw,abs(g1 - (wo(i,1) + aT*w1)))
       if(salt) then
-        w2 = mh(i,1,2)
+        w2 = wh(i,2)
         swb(i,is) = w2
         g2 = (0._rp,0._rp)
         do r=1,ny
@@ -334,9 +349,9 @@ contains
   !
   subroutine interface_local(aT,aS)
     !
-    ! on input row 1 of mh(:,:,1:2) holds G_theta and G_z (spectral); solves the interface conditions at
-    ! every x with the wall gradients G + a w_new (a = aT, aS), and returns theta_b, s_b and m* in row 1
-    ! of mh(:,:,1:3) (spectral)
+    ! on input wh(:,1:2) holds G_theta and G_z of the wall row (spectral); solves the interface conditions
+    ! at every x with the wall gradients G + a w_new (a = aT, aS), and returns theta_b, s_b and m* in
+    ! wh(:,1:3) (spectral). Only the wall row is transformed (row_bwd, row_fwd).
     !
     implicit none
     real(rp), intent(in) :: aT,aS
@@ -347,18 +362,15 @@ contains
     kt = diff(it); ks = 0._rp
     if(salt) ks = diff(is)
     st = melt_st; lam = melt_lambda; thf = melt_thf; sig = melt_sigma
-    call bwd_fft(mh(:,:,1),mp(:,:,1))
-    call bwd_fft(mh(:,:,2),mp(:,:,2))
+    call row_bwd(wh(:,1),wp(:,1))
+    call row_bwd(wh(:,2),wp(:,2))
     !
     ! interface conditions at every x of the wall row (on the rank that holds it)
     !
-    !$acc kernels default(present) async(1)
-    mp(:,:,3) = 0._rp
-    !$acc end kernels
     if(yA_lo == 1) then
       !$acc parallel loop default(present) async(1)
       do i=1,mx
-        gth = mp(i,1,1); gz = mp(i,1,2)
+        gth = wp(i,1); gz = wp(i,2)
         if(salt) then
           aa = st*kt*(gth + aT*(thf - lam*sig))
           bb = st*kt*aT*lam
@@ -389,12 +401,12 @@ contains
           sb  = 0._rp
           mm  = st*kt*(gth + aT*thf)
         end if
-        mp(i,1,1) = thb; mp(i,1,2) = sb; mp(i,1,3) = mm
+        wp(i,1) = thb; wp(i,2) = sb; wp(i,3) = mm
       end do
     end if
-    call fwd_fft(mp(:,:,1),mh(:,:,1))
-    call fwd_fft(mp(:,:,2),mh(:,:,2))
-    call fwd_fft(mp(:,:,3),mh(:,:,3))
+    call row_fwd(wp(:,1),wh(:,1))
+    call row_fwd(wp(:,2),wh(:,2))
+    call row_fwd(wp(:,3),wh(:,3))
   end subroutine interface_local
   !
   subroutine melt_means(mmean)
@@ -405,10 +417,10 @@ contains
     mmean(:) = 0._rp
     if(mean_owner) then
       !$acc wait(1)
-      !$acc update self(mh(i00:i00,1:1,1:3))
-      mmean(1) = real(mh(i00,1,3),rp)
-      mmean(2) = real(mh(i00,1,1),rp)
-      mmean(3) = real(mh(i00,1,2),rp)
+      !$acc update self(wh)
+      mmean(1) = real(wh(i00,3),rp)
+      mmean(2) = real(wh(i00,1),rp)
+      mmean(3) = real(wh(i00,2),rp)
     end if
     call MPI_ALLREDUCE(MPI_IN_PLACE,mmean,3,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,ierr)
   end subroutine melt_means
@@ -420,16 +432,16 @@ contains
     integer :: i,iunit,k
     character(len=7) :: cstep
     do k=1,3
-      call bwd_fft(mh(:,:,k),mp(:,:,k))
+      call row_bwd(wh(:,k),wp(:,k))
     end do
     if(yA_lo == 1) then
       !$acc wait(1)
-      !$acc update self(mp(:,1:1,1:3))
+      !$acc update self(wp)
       write(cstep,'(i7.7)') istep
       open(newunit=iunit,file=trim(data_dir)//'/melt_'//cstep//'.dat',status='replace')
       write(iunit,'(a)') '#             x              m*         theta_b             s_b'
       do i=1,mx
-        write(iunit,'(4es16.7e3)') lx*(i-1)/mx,mp(i,1,3),mp(i,1,1),mp(i,1,2)
+        write(iunit,'(4es16.7e3)') lx*(i-1)/mx,wp(i,3),wp(i,1),wp(i,2)
       end do
       close(iunit)
     end if

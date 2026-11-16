@@ -131,7 +131,7 @@ root. Two variants (`melt_xdiff`):
   * Each iteration solves all scalars with the current θ_b(x), s_b(x) and re-solves the local
     conditions, with R_ref = (min R_k + max R_k)/2 in place of R_k.
   * It converges for every mode whatever Δt; at convergence (`melt_tol`) the conditions hold exactly.
-  * In the tests: 1–7 iterations per substep, each one batched scalar solve and five x-FFTs.
+  * In the tests: 1–7 iterations per substep, each one batched scalar solve and five x-FFTs of the wall row only.
 
 In a convection test both variants agreed to all printed digits; `'explicit'` made the scalar solves 3.2×
 and the whole time step 1.8× faster. The scalars are solved before the velocity in each substep, and the
@@ -240,7 +240,7 @@ Use `timing = .true.` to see where the time goes.
 | `&physics` | `re`, `forcing` (`cfr`/`cpg`), `ubulk`, `dpdx`, `vv_neumann` (`explicit`/`compact`), `nl_form` (`rotational`/`advective`) |
 | `&time` | `nstep`, `tmax`, `wall_time_max`, `fixed_dt`, `dt`, `dt_max`, `dt_growth`, `cfl`, `cfl_visc` |
 | `&init` | `init_type` (`laminar`/`noise`/`mode`/`restart`), `init_amp`, `init_seed`, `mode_file`, `mode_kx`, `restart_file`, `reset_time` |
-| `&output` | `data_dir`, `iout_log`, `iout_stats`, `iout_save_stats`, `iout_restart`, `iout_field`, `tstats_start`, `mode_log_kx`, `timing` |
+| `&output` | `data_dir`, `iout_log`, `iout_stats`, `iout_save_stats`, `iout_restart`, `iout_field`, `tstats_start`, `stats_restart`, `mode_log_kx`, `timing` |
 | `&scalars` | `nscal` (default 2); per scalar `pr(n)`, `scal_theta(n)`, `sbc_bot(n)`/`sbc_top(n)` (`D`/`N`), `sval_bot(n)`/`sval_top(n)`, `ssrc_const(n)`, `ssrc_u(n)`, `sinit(n)` (`linear`/`zero`/`one`/`noise`); `scal_form` (`advective`/`divergence`/`skew`) |
 | `&buoyancy` | `gravity` (x, y direction), `ri(n)` (Richardson number per scalar, 0 = passive) |
 | `&melt_model` | `melt`, `melt_t`, `melt_s` (temperature and salinity scalars; `melt_s = 0`: Stefan), `melt_st` (St), `melt_lambda` (Λ), `melt_thf` (θ_f), `melt_sigma` (σ), `melt_blowing`, `melt_xdiff` (`explicit`/`implicit`), `melt_maxit`, `melt_tol` |
@@ -272,6 +272,11 @@ with wall difference Δs is `Ra = ri Δs ly³ re² pr` (`8 ri Δs re² pr` for `
   ⟨v′s′⟩.
 * **`restart.bin` / `restart.hdr`**: u, v and the scalars as global (nx/2, ny) complex arrays, independent of
   the number of ranks. φ is rebuilt from v at a restart; its wall values do not affect the solution.
+  They are written under temporary names and renamed only after every write succeeded, so a job that is killed
+  while writing, or a full disk, leaves the previous restart file intact (a warning is printed).
+* **`restart.stats`**: the accumulated sums of the statistics, written together with the restart file. A run with
+  `init_type = 'restart'` continues the same time average, so `stats.dat` covers the whole chain of jobs. Set
+  `stats_restart = .false.` (or `reset_time = .true.`) to start the averaging anew.
 * **`fld_NNNNNNN_<u|v|s1|s2>.bin` + `.xmf`**: physical fields on the dealiased mx × ny grid, readable with
   ParaView/VisIt or `tools/plot_field.py`:
 

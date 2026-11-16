@@ -18,7 +18,7 @@ module mod_decomp
 #endif
   implicit none
   private
-  public :: init_decomp,finalize_decomp,tr_x2y,tr_y2x
+  public :: init_decomp,finalize_decomp,tr_x2y,tr_y2x,row_gather,row_scatter
   integer, public :: myid,nproc
   integer, public :: kx_lo,nkx,yA_lo,nyA
   integer(i8), public :: tr_work_bytes = 0
@@ -193,6 +193,24 @@ contains
       end do
     end do
   end subroutine tr_y2x
+  !
+  subroutine row_gather(f,g)
+    ! one spectral row: the pieces f(nkx) of all ranks -> g(nxh) on rank 0 (host arrays)
+    implicit none
+    complex(rp), intent(in ) :: f(nkx)
+    complex(rp), intent(out) :: g(nxh)
+    integer :: ierr
+    call MPI_GATHERV(f,nkx,MPI_DOUBLE_COMPLEX,g,nkx_r,kxlo_r-1,MPI_DOUBLE_COMPLEX,0,MPI_COMM_WORLD,ierr)
+  end subroutine row_gather
+  !
+  subroutine row_scatter(g,f)
+    ! one spectral row: g(nxh) on rank 0 -> the pieces f(nkx) of all ranks (host arrays)
+    implicit none
+    complex(rp), intent(in ) :: g(nxh)
+    complex(rp), intent(out) :: f(nkx)
+    integer :: ierr
+    call MPI_SCATTERV(g,nkx_r,kxlo_r-1,MPI_DOUBLE_COMPLEX,f,nkx,MPI_DOUBLE_COMPLEX,0,MPI_COMM_WORLD,ierr)
+  end subroutine row_scatter
   !
   subroutine alltoallv(sb,scnt,sdsp,rb,rcnt,rdsp)
     implicit none
