@@ -27,7 +27,7 @@ program solver2d
   implicit none
   integer :: ierr,istep,istep0,ilog,n,nf
   real(rp) :: time,dtcur,divm,t0,t1,tstep,twall0
-  logical :: is_done,is_stop
+  logical :: is_done,is_stop,is_ok
   character(len=8), allocatable :: names(:)
   character(len=4) :: cs
   !
@@ -67,6 +67,8 @@ program solver2d
     call read_restart(trim(restart_file),time,istep,dtcur,u,v,s)
     if(reset_time) then
       time = 0._rp; istep = 0
+    else if(stats_restart) then
+      call read_stats_state(trim(restart_file))
     end if
   else
     time = 0._rp; istep = 0; dtcur = dt
@@ -127,8 +129,11 @@ program solver2d
     call toc(tm_stats)
     call tic(tm_io)
     if(iout_restart > 0) then
-      if(mod(istep,iout_restart) == 0 .or. is_done) &
-        call write_restart(trim(data_dir)//'/restart',time,istep,dtcur,u,v,s)
+      if(mod(istep,iout_restart) == 0 .or. is_done) then
+        call write_restart(trim(data_dir)//'/restart',time,istep,dtcur,u,v,s,is_ok)
+        ! the sums of the statistics belong to this restart file: only written together with it
+        if(is_ok) call write_stats_state(trim(data_dir)//'/restart')
+      end if
     end if
     if(iout_field > 0) then
       if(mod(istep,iout_field) == 0) call output_fields()
