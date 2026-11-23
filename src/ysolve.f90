@@ -66,6 +66,10 @@ module mod_ysolve
   complex(rp), allocatable :: wa(:,:),wb(:,:)
   real(rp), allocatable :: hinv_c(:,:,:),ginv_v(:,:,:),hinv_v(:,:)
   real(rp) :: c_cached_vv(3) = -1._rp
+  ! constant flow rate: h with (1 - c D2) h = 1 and the wall conditions of U, and its bulk value, per RK substep;
+  ! they depend on c (dt) only and are recomputed when c changes (a serial solve on one GPU thread)
+  complex(rp), allocatable :: hcfr(:,:)
+  real(rp) :: c_cached_cfr(3) = -1._rp, hb_cfr(3) = 0._rp
   real(rp), allocatable :: dw1(:),dwn(:)    ! wall functionals at y = 0 (dw1) and y = ly (dwn):
                                             ! dv/dy = 0 (no-slip) or d2v/dy2 = 0 (free-slip)
   integer :: ndw1,ndwn
@@ -934,28 +938,47 @@ contains
     if(.not.mean_owner) return
     zero = (0._rp,0._rp)
     fsb = freeslip_bot; fst = freeslip_top
-    !$acc serial default(present) private(h) async(1)
-    do l=1,4
-      h(l) = hinv_c(l,i00,q)
-    end do
-    do r=1,ny
-      wb(i00,r) = (1._rp,0._rp)
-    end do
-    call hsolve_mean(nkx,ny,i00,klh,kuh,1._rp,-c,a2,b2,h,wb,sx,wa,psi,uf,c1,nc1,cn,ncn,fsb,fst)
-    !$acc end serial
-    ub = 0._rp; hb = 0._rp
     wh = 1._rp/hgt
-    !$acc parallel loop default(present) reduction(+:ub,hb) async(1)
+    if(.not.allocated(hcfr)) then
+      allocate(hcfr(ny,3)); hcfr(:,:) = zero
+      !$acc enter data copyin(hcfr)
+    end if
+    if(c /= c_cached_cfr(q)) then
+      !
+      ! h depends on c only: solved again only when dt (and so c) changes. The solve runs on one GPU
+      ! thread and took as long as the whole velocity solve of a column (~13 ms per substep with ny = 1025),
+      ! so that doing it every substep made the rank with kx = 0 the slowest one.
+      !
+      !$acc serial default(present) private(h) async(1)
+      do l=1,4
+        h(l) = hinv_c(l,i00,q)
+      end do
+      do r=1,ny
+        wb(i00,r) = (1._rp,0._rp)
+      end do
+      call hsolve_mean(nkx,ny,i00,klh,kuh,1._rp,-c,a2,b2,h,wb,sx,wa,psi,uf,c1,nc1,cn,ncn,fsb,fst)
+      !$acc end serial
+      hb = 0._rp
+      !$acc parallel loop default(present) reduction(+:hb) async(1)
+      do r=1,ny
+        hcfr(r,q) = sx(i00,r)
+        hb = hb + wh*wq(r)*real(sx(i00,r),rp)
+      end do
+      !$acc wait(1)
+      hb_cfr(q) = hb
+      c_cached_cfr(q) = c
+    end if
+    ub = 0._rp
+    !$acc parallel loop default(present) reduction(+:ub) async(1)
     do r=1,ny
       ub = ub + wh*wq(r)*real(u(i00,r),rp)
-      hb = hb + wh*wq(r)*real(sx(i00,r),rp)
     end do
     !$acc wait(1)
-    alpha = (ub_target - ub)/hb
+    alpha = (ub_target - ub)/hb_cfr(q)
     !$acc parallel loop default(present) async(1)
     do r=1,ny
-      u(i00,r)   = u(i00,r)   + alpha*sx(i00,r)
-      phv(i00,r) = phv(i00,r) + alpha*sx(i00,r)
+      u(i00,r)   = u(i00,r)   + alpha*hcfr(r,q)
+      phv(i00,r) = phv(i00,r) + alpha*hcfr(r,q)
     end do
     dpdx_eff = alpha/coef
   end subroutine vv_cfr
