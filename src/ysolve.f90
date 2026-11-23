@@ -863,6 +863,26 @@ contains
       call vv_matrices(q,c)
       c_cached_vv(q) = c
     end if
+    !
+    ! mean flow U (kx = 0, on one rank): U = 0 (no-slip) or dU/dy = 0 (free-slip) at each wall.
+    ! It runs as a separate one-thread kernel on queue 2, at the same time as the other columns on
+    ! queue 1. Inside the main kernel its different branch made the GPU run both branches one after the
+    ! other for the 32 threads (warp) of kx = 0, which slowed the whole kernel of that rank by ~25%
+    ! (~12 ms per substep with ny = 1025, nkx = 512 per rank) and the other ranks waited for it.
+    !
+    if(mean_owner) then
+      !$acc wait(1) async(2)
+      !$acc serial default(present) private(h) async(2)
+      do l=1,4
+        h(l) = hinv_c(l,i00,q)
+      end do
+      call hsolve_mean(nkx,ny,i00,klh,kuh,1._rp,-c,a2,b2,h,phv,sx,wa,wb,uf,c1,nc1,cn,ncn,fsb,fst)
+      do r=1,ny
+        phv(i00,r) = sx(i00,r)
+        u(i00,r) = sx(i00,r); v(i00,r) = vbw(i00)    ! mean v: zero, or the mean melt velocity
+      end do
+      !$acc end serial
+    end if
     !$acc parallel loop gang vector default(present) private(h,hv) async(1)
     do i=1,nkx
       kx = kxv(i); k2 = kx**2
@@ -872,14 +892,7 @@ contains
         h(l) = hinv_c(l,i,q)
       end do
       if(ismean(i)) then
-        !
-        ! mean flow U (kx = 0): U = 0 (no-slip) or dU/dy = 0 (free-slip) at each wall
-        !
-        call hsolve_mean(nkx,ny,i,klh,kuh,ca,cb,a2,b2,h,phv,sx,wa,wb,uf,c1,nc1,cn,ncn,fsb,fst)
-        do r=1,ny
-          phv(i,r) = sx(i,r)
-          u(i,r) = sx(i,r); v(i,r) = vbw(i)    ! mean v: zero, or the mean melt velocity
-        end do
+        ! solved above (queue 2)
       else
         do l=1,4
           hv(l) = hinv_v(l,i)
@@ -919,6 +932,10 @@ contains
         if(.not.fst) u(i,ny) = zero
       end if
     end do
+    ! queue 1 continues only after the mean column (queue 2) is done; the host does not wait
+    if(mean_owner) then
+      !$acc wait(2) async(1)
+    end if
   end subroutine vv_step
   !
   subroutine vv_cfr(u,ub_target,dpdx_eff,coef,c,q)
