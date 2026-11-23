@@ -9,10 +9,16 @@
 ! the traffic stays on NVLink. A 2D problem has no second direction to decompose, so the
 ! pencil machinery of HiCHAN (cuDecomp, diezDecomp, process grids) is not needed.
 !
+! With NCCL (make ... NCCL=1, comm_backend = 'nccl' in &parallel, the default of such a build) the all-to-all
+! is one group of ncclSend/ncclRecv on the stream of OpenACC queue 1 (src/nccl_wrap.c): NVLink inside a node,
+! no host synchronisation around it. Plain MPI's device-buffer path inside a node reached only ~1 GB/s per GPU
+! on Arrhenius. NCCL_MOCK=1 (CPU build) runs the same code path with an MPI stand-in, for testing.
+!
 module mod_decomp
   use mpi
   use mod_types
-  use mod_param, only: nxh,ny,abort_run
+  use mod_param, only: nxh,ny,abort_run,comm_backend
+  use iso_c_binding
   use mod_timer, only: tic,toc,tm_a2a
 #if defined(_OPENACC)
   use openacc
@@ -29,6 +35,33 @@ module mod_decomp
   integer, allocatable :: kxlo_r(:),nkx_r(:),ylo_r(:),ny_r(:),own_kx(:),own_y(:)
   integer, allocatable :: sc(:),sd(:),rc(:),rd(:)
   complex(rp), allocatable :: sbuf(:),rbuf(:)
+  logical, public :: use_nccl = .false.
+#if defined(_NCCL)
+  interface
+    integer(c_int) function s2d_nccl_id_size() bind(c,name='s2d_nccl_id_size')
+      import :: c_int
+    end function s2d_nccl_id_size
+    integer(c_int) function s2d_nccl_get_id(id) bind(c,name='s2d_nccl_get_id')
+      import :: c_int,c_char
+      character(kind=c_char) :: id(*)
+    end function s2d_nccl_get_id
+    integer(c_int) function s2d_nccl_init(id,np,rank) bind(c,name='s2d_nccl_init')
+      import :: c_int,c_char
+      character(kind=c_char) :: id(*)
+      integer(c_int), value :: np,rank
+    end function s2d_nccl_init
+    integer(c_int) function s2d_nccl_finalize() bind(c,name='s2d_nccl_finalize')
+      import :: c_int
+    end function s2d_nccl_finalize
+    integer(c_int) function s2d_nccl_alltoallv(sb,scnt,sdsp,rb,rcnt,rdsp,np,rank,stream) bind(c,name='s2d_nccl_alltoallv')
+      import :: c_int,c_intptr_t,rp
+      complex(rp) :: sb(*),rb(*)
+      integer(c_int) :: scnt(*),sdsp(*),rcnt(*),rdsp(*)
+      integer(c_int), value :: np,rank
+      integer(c_intptr_t), value :: stream
+    end function s2d_nccl_alltoallv
+  end interface
+#endif
 contains
   subroutine init_decomp
     implicit none
@@ -40,6 +73,7 @@ contains
     call init_device
     istream = acc_get_cuda_stream(1)
 #endif
+    call init_comm
     if(nproc > nxh .or. nproc > ny) call abort_run('too many MPI processes: need nproc <= nx/2 and nproc <= ny')
     allocate(kxlo_r(0:nproc-1),nkx_r(0:nproc-1),ylo_r(0:nproc-1),ny_r(0:nproc-1))
     do p=0,nproc-1
@@ -144,8 +178,36 @@ contains
     end if
   end subroutine distribute
   !
+  subroutine init_comm
+    ! the library for the transposes: NCCL (comm_backend = 'nccl', NCCL=1 build) or MPI
+    implicit none
+#if defined(_NCCL)
+    character(kind=c_char) :: id(256)
+    integer :: ierr
+    use_nccl = trim(comm_backend) == 'nccl' .and. nproc > 1
+    if(use_nccl) then
+      if(s2d_nccl_id_size() > size(id)) call abort_run('NCCL unique id larger than expected')
+      if(myid == 0) then
+        if(s2d_nccl_get_id(id) /= 0) call abort_run('ncclGetUniqueId failed')
+      end if
+      call MPI_BCAST(id,s2d_nccl_id_size(),MPI_CHARACTER,0,MPI_COMM_WORLD,ierr)
+      if(s2d_nccl_init(id,int(nproc,c_int),int(myid,c_int)) /= 0) &
+        call abort_run('ncclCommInitRank failed (NCCL_DEBUG=WARN shows why; comm_backend = ''mpi'' avoids NCCL)')
+    end if
+#endif
+    if(myid == 0) write(*,'(a,a)') ' transposes (all-to-all) with ', &
+      trim(merge('NCCL         ',merge('MPI          ','local copies ',nproc > 1),use_nccl))
+  end subroutine init_comm
+  !
   subroutine finalize_decomp
     implicit none
+#if defined(_NCCL)
+    integer :: ierr
+    if(use_nccl) then
+      !$acc wait
+      ierr = s2d_nccl_finalize()
+    end if
+#endif
     !$acc exit data delete(kxlo_r,nkx_r,ylo_r,ny_r,own_kx,own_y,sd,rd,sbuf,rbuf)
   end subroutine finalize_decomp
   !
@@ -200,6 +262,23 @@ contains
     complex(rp), intent(inout) :: sb(:),rb(:)
     integer, intent(in) :: scnt(:),sdsp(:),rcnt(:),rdsp(:)
     integer :: ierr
+#if defined(_NCCL)
+    integer(c_intptr_t) :: st
+    if(use_nccl) then
+      ! on the stream of queue 1, after the packing kernels and before the unpacking: no wait needed
+      st = 0
+#if defined(_CUDA)
+      st = int(istream,c_intptr_t)
+#endif
+      call tic(tm_a2a)
+      !$acc host_data use_device(sb,rb)
+      ierr = s2d_nccl_alltoallv(sb,scnt,sdsp,rb,rcnt,rdsp,int(nproc,c_int),int(myid,c_int),st)
+      !$acc end host_data
+      call toc(tm_a2a)
+      if(ierr /= 0) call abort_run('NCCL all-to-all failed')
+      return
+    end if
+#endif
     !$acc wait(1)
     call tic(tm_a2a)
     !$acc host_data use_device(sb,rb)

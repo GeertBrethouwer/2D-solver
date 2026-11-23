@@ -67,6 +67,10 @@ module mod_param
   logical  :: timing = .false.              ! timers: report at the end, time per step in timing_steps.dat
   logical  :: timing_sync = .true.          ! timers wait for the GPU (exact attribution, small overhead)
   !
+  ! &parallel (optional)
+  !
+  character(len=8) :: comm_backend = ''     ! transposes: 'nccl' (default of an NCCL=1 build) or 'mpi'
+  !
   ! &scalars (two active scalars by default: e.g. temperature and salinity)
   !
   integer  :: nscal = 2
@@ -137,6 +141,7 @@ contains
                       mode_log_kx,timing,timing_sync
     namelist /scalars/ nscal,pr,scal_theta,sbc_bot,sbc_top,sval_bot,sval_top,ssrc_const,ssrc_u,sinit,scal_form
     namelist /buoyancy/ gravity,ri
+    namelist /parallel/ comm_backend
     namelist /melt_model/ melt,melt_t,melt_s,melt_st,melt_lambda,melt_thf,melt_sigma,melt_blowing,melt_xdiff, &
                           melt_maxit,melt_tol
     !
@@ -157,7 +162,20 @@ contains
     read(iunit,nml=buoyancy,iostat=ios); if(ios > 0 ) call abort_run('error reading namelist &buoyancy')
     rewind(iunit)
     read(iunit,nml=melt_model,iostat=ios); if(ios > 0 ) call abort_run('error reading namelist &melt_model')
+    rewind(iunit)
+    read(iunit,nml=parallel,iostat=ios); if(ios > 0 ) call abort_run('error reading namelist &parallel')
     close(iunit)
+    if(len_trim(comm_backend) == 0) then
+#if defined(_NCCL)
+      comm_backend = 'nccl'
+#else
+      comm_backend = 'mpi'
+#endif
+    end if
+    if(trim(comm_backend) /= 'nccl' .and. trim(comm_backend) /= 'mpi') call abort_run("comm_backend must be 'nccl' or 'mpi'")
+#if !defined(_NCCL)
+    if(trim(comm_backend) == 'nccl') call abort_run("comm_backend = 'nccl' needs a build with NCCL=1")
+#endif
     !
     if(mod(nx,2) /= 0 .or. nx < 4) call abort_run('nx must be even and >= 4')
     if(ny < 9) call abort_run('ny must be at least 9')

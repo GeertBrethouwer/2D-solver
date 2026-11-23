@@ -158,7 +158,8 @@ can be used to start a run (then restart with 0.5).
 src/types.f90      kinds
 src/param.f90      input (namelists in input.nml)
 src/compact.f90    grid, compact-scheme coefficients on non-uniform grids, quadrature (from HiCHAN)
-src/decomp.f90     1D (slab) decomposition, x-lines <-> y-lines transpose (MPI_Alltoallv, CUDA-aware)
+src/decomp.f90     1D (slab) decomposition, x-lines <-> y-lines transpose (MPI_Alltoallv or NCCL)
+src/nccl_wrap.c    NCCL calls of the transposes (NCCL=1; NCCL_MOCK=1: MPI stand-in for CPU tests)
 src/fft.f90        x-transforms (cuFFT / FFTW), dealiasing
 src/ysolve.f90     wall-normal column solvers: derivatives, scalar Helmholtz, velocity-vorticity step
 src/melt.f90       three-equation melt condition at an ice wall, coupled implicitly to the scalar solves
@@ -195,14 +196,21 @@ module load GPU/buildenv-nvhpc/25.9-cu13.0
 ```
 
 ```bash
-make CONFIG=configs/arrhenius.mk
+make CONFIG=configs/arrhenius.mk NCCL=1
 ```
 
-This builds with `-acc -cuda -gpu=cc90`, cuFFT and `-D_CUDA`. The transposes call `MPI_Alltoallv` on device
-buffers, so the MPI must be CUDA-aware (the HPC SDK's MPI is). On one node the traffic stays on NVLink.
+This builds with `-acc -cuda -gpu=cc90`, cuFFT and `-D_CUDA`. With `NCCL=1` (recommended for several GPUs) the
+transposes use NCCL: one group of `ncclSend`/`ncclRecv` on the stream of the packing kernels
+(`src/nccl_wrap.c`), over NVLink inside a node and Slingshot between nodes. NCCL is taken from the HPC SDK next
+to `nvcc` (`tools/find_nccl.sh`; set `NCCL_HOME` to override). `comm_backend = 'mpi'` in `&parallel` switches
+back to `MPI_Alltoallv` on device buffers (a CUDA-aware MPI is then needed; the HPC SDK's MPI is). On one
+Arrhenius node MPI's path reached only about 1 GB/s per GPU, and the all-to-all took half of the time step.
+On Arrhenius, start NCCL runs with `examples/arrhenius_job.sh`: the site resets NCCL's network settings in
+every task, and on one node both Open MPI and NCCL need settings of their own (see the script).
 
 **Other builds:** `make DEBUG=1` adds run-time checks. `make ACC_HOST=1` builds with `gfortran -fopenacc`
-(OpenACC host fallback, FFTW instead of cuFFT) to check the directives without a GPU.
+(OpenACC host fallback, FFTW instead of cuFFT) to check the directives without a GPU. `make NCCL_MOCK=1` (CPU)
+runs the NCCL code path with an MPI stand-in for NCCL; its results are bit-identical to the MPI path.
 
 **Running:** one MPI rank per GPU (`examples/arrhenius_job.sh`: 1 node, 4 tasks, 4 GPUs). The code prints the
 GPU used by each rank and stops if two ranks share a GPU. The number of ranks must not exceed nx/2 or ny.
@@ -232,12 +240,12 @@ Use `timing = .true.` (in `&output`) to see where the time goes:
 
 * `timing_report.txt` (also printed at the end of the run): the wall-clock time of each part of the time loop:
   RK3 steps, nonlinear terms, time-step limit, velocity solve, scalar solves and the melt condition, FFTs,
-  transposes split into the `MPI_Alltoallv` (communication) and the packing kernels, log, statistics and
+  transposes split into the all-to-all (communication, MPI or NCCL) and the packing kernels, log, statistics and
   restart/field files. For each part: the number of calls, the min/mean/max over the MPI ranks, the percentage
   of the time loop and the time per step. Also the distribution of the time per step (min/median/mean/max),
   the number of steps slower than 2× the median, and the 10 slowest steps with their breakdown.
 * `timing_steps.dat`: one line per time step: step, t, Δt, the wall-clock time of the step (slowest rank,
-  fastest rank, mean) and the time of the step in FFTs + transposes, transposes, `MPI_Alltoallv`, velocity
+  fastest rank, mean) and the time of the step in FFTs + transposes, transposes, all-to-all, velocity
   solve, scalar solves and output (max over the ranks).
 * `timing_sync = .true.` (default) makes every timer wait for the GPU, so that asynchronous GPU work is
   attributed to the right part. With `.false.` the parts are less exact, but the time per step stays exact.
@@ -254,6 +262,7 @@ Use `timing = .true.` (in `&output`) to see where the time goes:
 | `&time` | `nstep` (number of steps of this run, counted from the start or the restart step), `tmax`, `wall_time_max`, `fixed_dt`, `dt`, `dt_max`, `dt_growth`, `cfl`, `cfl_visc` |
 | `&init` | `init_type` (`laminar`/`noise`/`mode`/`restart`), `init_amp`, `init_seed`, `mode_file`, `mode_kx`, `restart_file`, `reset_time` |
 | `&output` | `data_dir`, `iout_log`, `iout_stats`, `iout_save_stats`, `iout_restart`, `iout_field`, `tstats_start`, `mode_log_kx`, `timing`, `timing_sync` |
+| `&parallel` (optional) | `comm_backend`: `'nccl'` (default of an `NCCL=1` build) or `'mpi'`, for the transposes |
 | `&scalars` | `nscal` (default 2); per scalar `pr(n)`, `scal_theta(n)`, `sbc_bot(n)`/`sbc_top(n)` (`D`/`N`), `sval_bot(n)`/`sval_top(n)`, `ssrc_const(n)`, `ssrc_u(n)`, `sinit(n)` (`linear`/`zero`/`one`/`noise`); `scal_form` (`advective`/`divergence`/`skew`) |
 | `&buoyancy` | `gravity` (x, y direction), `ri(n)` (Richardson number per scalar, 0 = passive) |
 | `&melt_model` | `melt`, `melt_t`, `melt_s` (temperature and salinity scalars; `melt_s = 0`: Stefan), `melt_st` (St), `melt_lambda` (Λ), `melt_thf` (θ_f), `melt_sigma` (σ), `melt_blowing`, `melt_xdiff` (`explicit`/`implicit`), `melt_maxit`, `melt_tol` |

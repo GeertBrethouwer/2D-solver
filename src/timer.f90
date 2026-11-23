@@ -33,7 +33,7 @@ module mod_timer
     '      melt condition at the interface'       , &
     'FFTs incl. transposes (all calls)'           , &
     '  transposes (packing + MPI, all calls)'     , &
-    '    MPI_Alltoallv (communication)'           , &
+    '    all-to-all (communication, MPI or NCCL)' , &
     'log output (divergence, log.dat)'            , &
     'statistics (accumulate, write)'              , &
     'restart and field files'                     ]
@@ -83,7 +83,7 @@ contains
       write(ipt,'(a)') '# wall-clock time per time step [s]: max/min/mean over the MPI ranks, and the time'// &
                        ' (max over the ranks) spent in parts of the step'
       write(ipt,'(a)') '#    step          time            dt    t_step_max    t_step_min   t_step_mean'// &
-                       '      t_fft+tr   t_transpose        t_mpi      t_vsolve      t_ssolve      t_output'
+                       '      t_fft+tr   t_transpose      t_a2a      t_vsolve      t_ssolve      t_output'
       allocate(hist(ncol+3,1024))
     end if
     tprev(:) = ttot(:)
