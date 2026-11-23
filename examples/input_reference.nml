@@ -35,7 +35,7 @@
                            ! 'explicit', first/last row of the compact D2 with 'compact') and dU/dy = 0
 /
 &time
-  nstep = 1000             ! maximum number of time steps
+  nstep = 1000             ! number of time steps of this run (also after a restart)
   tmax = 1.e300            ! stop at this time
   wall_time_max = 1.e300   ! stop (writing a restart file) after this many seconds
   dt = 1.e-5               ! fixed time step, or the first step of an adaptive run

@@ -251,7 +251,7 @@ Use `timing = .true.` (in `&output`) to see where the time goes:
 |---|---|
 | `&grid` | `nx` (Fourier modes, even), `ny` (points incl. walls), `lx`, `ly` (box height; walls at y = 0 and ly; default 2), `grid_type` (`auto`/`tanh`/`tanh_top`/`tanh_bot`/`uniform`/`file`), `grid_alpha`, `grid_file`, `fd_order` (4 or 6), `dealias` |
 | `&physics` | `re`, `forcing` (`cfr`/`cpg`), `ubulk`, `dpdx`, `vv_neumann` (`explicit`/`compact`), `nl_form` (`rotational`/`advective`) |
-| `&time` | `nstep`, `tmax`, `wall_time_max`, `fixed_dt`, `dt`, `dt_max`, `dt_growth`, `cfl`, `cfl_visc` |
+| `&time` | `nstep` (number of steps of this run, counted from the start or the restart step), `tmax`, `wall_time_max`, `fixed_dt`, `dt`, `dt_max`, `dt_growth`, `cfl`, `cfl_visc` |
 | `&init` | `init_type` (`laminar`/`noise`/`mode`/`restart`), `init_amp`, `init_seed`, `mode_file`, `mode_kx`, `restart_file`, `reset_time` |
 | `&output` | `data_dir`, `iout_log`, `iout_stats`, `iout_save_stats`, `iout_restart`, `iout_field`, `tstats_start`, `mode_log_kx`, `timing`, `timing_sync` |
 | `&scalars` | `nscal` (default 2); per scalar `pr(n)`, `scal_theta(n)`, `sbc_bot(n)`/`sbc_top(n)` (`D`/`N`), `sval_bot(n)`/`sval_top(n)`, `ssrc_const(n)`, `ssrc_u(n)`, `sinit(n)` (`linear`/`zero`/`one`/`noise`); `scal_form` (`advective`/`divergence`/`skew`) |
