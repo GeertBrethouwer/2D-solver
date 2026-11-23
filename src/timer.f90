@@ -136,17 +136,22 @@ contains
     nb = 0
   end subroutine flush_steps
   !
-  subroutine timing_report(nsteps,npoints)
-    ! call after the time loop (by all ranks)
+  subroutine timing_report(nsteps,npoints,kx_lo,nkx)
+    ! call after the time loop (by all ranks); kx_lo, nkx: the Fourier modes of this rank in the
+    ! wall-normal solves (for the per-rank table)
     integer , intent(in) :: nsteps
     real(rp), intent(in) :: npoints
+    integer , intent(in) :: kx_lo,nkx
     real(rp) :: tmin(ntm),tmax(ntm),tsum(ntm),tloop,med,s
-    real(rp), allocatable :: ts(:)
-    integer :: ierr,i,j,u(2),iu,nspike,ntop
-    integer, allocatable :: idx(:)
+    real(rp), allocatable :: ts(:),trank(:,:)
+    integer :: ierr,i,j,u(2),iu,nspike,ntop,r,rslow
+    integer, allocatable :: idx(:),kxr(:,:)
     if(.not.timing) return
     call toc(tm_loop)
     call flush_steps()
+    allocate(trank(ntm,0:nproc_-1),kxr(2,0:nproc_-1))
+    call MPI_GATHER(ttot,ntm,MPI_DOUBLE_PRECISION,trank,ntm,MPI_DOUBLE_PRECISION,0,MPI_COMM_WORLD,ierr)
+    call MPI_GATHER([kx_lo,nkx],2,MPI_INTEGER,kxr,2,MPI_INTEGER,0,MPI_COMM_WORLD,ierr)
     call MPI_REDUCE(ttot,tmin,ntm,MPI_DOUBLE_PRECISION,MPI_MIN,0,MPI_COMM_WORLD,ierr)
     call MPI_REDUCE(ttot,tmax,ntm,MPI_DOUBLE_PRECISION,MPI_MAX,0,MPI_COMM_WORLD,ierr)
     call MPI_REDUCE(ttot,tsum,ntm,MPI_DOUBLE_PRECISION,MPI_SUM,0,MPI_COMM_WORLD,ierr)
@@ -205,6 +210,24 @@ contains
         do j=1,ntop
           write(u(iu),'(17x,i12,7f9.4)') nint(hist(1,idx(j))),hist(2,idx(j)),hist(5:10,idx(j))
         end do
+        write(u(iu),'(a)') ' ======================================================================================='
+      end do
+    end if
+    !
+    ! per rank: where the time differs between the ranks (the all-to-all includes waiting for the slowest rank)
+    !
+    if(nproc_ > 1) then
+      rslow = maxloc(trank(tm_vsolve,:),1)-1
+      do iu=1,2
+        write(u(iu),'(a)') ' per rank, ms per step (kx: the Fourier modes of the rank in the wall-normal solves;'
+        write(u(iu),'(a)') ' the all-to-all includes the time spent waiting for the slowest rank):'
+        write(u(iu),'(a)') '   rank     kx from      to   RK steps  nonlinear    v-solve    s-solve      melt   all-to-all'
+        do r=0,min(nproc_,64)-1
+          write(u(iu),'(i7,2i10,6f11.3,a)') r,kxr(1,r),kxr(1,r)+kxr(2,r)-1, &
+            1000*trank([tm_rk,tm_nl,tm_vsolve,tm_ssolve,tm_melt,tm_a2a],r)/max(nsteps,1), &
+            merge('  <- slowest v-solve','                    ',r == rslow)
+        end do
+        if(nproc_ > 64) write(u(iu),'(a,i0,a,i0,a)') '   (first 64 of ',nproc_,' ranks; slowest v-solve on rank ',rslow,')'
         write(u(iu),'(a)') ' ======================================================================================='
       end do
     end if

@@ -138,7 +138,7 @@ program solver2d
   end do
   !$acc wait
   t1 = MPI_WTIME()
-  call timing_report(istep-istep0,real(nx,rp)*ny)
+  call timing_report(istep-istep0,real(nx,rp)*ny,kx_lo,nkx)
   tstep = (t1-t0)/max(istep-istep0,1)
   if(myid == 0) then
     write(*,'(a,es12.4,a)') ' wall-clock time per time step: ',tstep,' s'
