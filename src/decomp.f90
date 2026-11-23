@@ -55,7 +55,12 @@ module mod_decomp
     end function s2d_nccl_finalize
     integer(c_int) function s2d_nccl_alltoallv(sb,scnt,sdsp,rb,rcnt,rdsp,np,rank,stream) bind(c,name='s2d_nccl_alltoallv')
       import :: c_int,c_intptr_t,rp
+#if defined(_CUDA)
+      ! called inside !$acc host_data use_device(sb,rb): device arrays (their device addresses reach C)
+      complex(rp), device :: sb(*),rb(*)
+#else
       complex(rp) :: sb(*),rb(*)
+#endif
       integer(c_int) :: scnt(*),sdsp(*),rcnt(*),rdsp(*)
       integer(c_int), value :: np,rank
       integer(c_intptr_t), value :: stream
