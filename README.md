@@ -228,7 +228,20 @@ A further step, not implemented: within an RK substep the scalar solves are inde
 step, so the two could run concurrently on separate OpenACC queues (each needs its own work arrays).
 
 GPUs pay off for large nx. For small or moderate grids, one GPU, or the CPU build, can be as fast as four.
-Use `timing = .true.` to see where the time goes.
+Use `timing = .true.` (in `&output`) to see where the time goes:
+
+* `timing_report.txt` (also printed at the end of the run): the wall-clock time of each part of the time loop:
+  RK3 steps, nonlinear terms, time-step limit, velocity solve, scalar solves and the melt condition, FFTs,
+  transposes split into the `MPI_Alltoallv` (communication) and the packing kernels, log, statistics and
+  restart/field files. For each part: the number of calls, the min/mean/max over the MPI ranks, the percentage
+  of the time loop and the time per step. Also the distribution of the time per step (min/median/mean/max),
+  the number of steps slower than 2× the median, and the 10 slowest steps with their breakdown.
+* `timing_steps.dat`: one line per time step: step, t, Δt, the wall-clock time of the step (slowest rank,
+  fastest rank, mean) and the time of the step in FFTs + transposes, transposes, `MPI_Alltoallv`, velocity
+  solve, scalar solves and output (max over the ranks).
+* `timing_sync = .true.` (default) makes every timer wait for the GPU, so that asynchronous GPU work is
+  attributed to the right part. With `.false.` the parts are less exact, but the time per step stays exact.
+  The results do not depend on the timing settings.
 
 ## Input
 
@@ -240,7 +253,7 @@ Use `timing = .true.` to see where the time goes.
 | `&physics` | `re`, `forcing` (`cfr`/`cpg`), `ubulk`, `dpdx`, `vv_neumann` (`explicit`/`compact`), `nl_form` (`rotational`/`advective`) |
 | `&time` | `nstep`, `tmax`, `wall_time_max`, `fixed_dt`, `dt`, `dt_max`, `dt_growth`, `cfl`, `cfl_visc` |
 | `&init` | `init_type` (`laminar`/`noise`/`mode`/`restart`), `init_amp`, `init_seed`, `mode_file`, `mode_kx`, `restart_file`, `reset_time` |
-| `&output` | `data_dir`, `iout_log`, `iout_stats`, `iout_save_stats`, `iout_restart`, `iout_field`, `tstats_start`, `mode_log_kx`, `timing` |
+| `&output` | `data_dir`, `iout_log`, `iout_stats`, `iout_save_stats`, `iout_restart`, `iout_field`, `tstats_start`, `mode_log_kx`, `timing`, `timing_sync` |
 | `&scalars` | `nscal` (default 2); per scalar `pr(n)`, `scal_theta(n)`, `sbc_bot(n)`/`sbc_top(n)` (`D`/`N`), `sval_bot(n)`/`sval_top(n)`, `ssrc_const(n)`, `ssrc_u(n)`, `sinit(n)` (`linear`/`zero`/`one`/`noise`); `scal_form` (`advective`/`divergence`/`skew`) |
 | `&buoyancy` | `gravity` (x, y direction), `ri(n)` (Richardson number per scalar, 0 = passive) |
 | `&melt_model` | `melt`, `melt_t`, `melt_s` (temperature and salinity scalars; `melt_s = 0`: Stefan), `melt_st` (St), `melt_lambda` (Λ), `melt_thf` (θ_f), `melt_sigma` (σ), `melt_blowing`, `melt_xdiff` (`explicit`/`implicit`), `melt_maxit`, `melt_tol` |

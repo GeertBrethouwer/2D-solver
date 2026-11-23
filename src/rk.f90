@@ -14,7 +14,7 @@ module mod_rk
   use mod_decomp , only: nkx,nyA,yA_lo
   use mod_fields
   use mod_fft    , only: fwd_fft,bwd_fft
-  use mod_timer  , only: tic,toc,tm_nl,tm_dt,tm_vsolve,tm_ssolve
+  use mod_timer  , only: tic,toc,tm_nl,tm_dt,tm_vsolve,tm_ssolve,tm_melt
   use mod_ysolve , only: deriv1,deriv1m,add_lap,add_kx2,scalar_solve,kxv,mean_owner,i00,mean_gradient_max, &
                          vv_rhs_terms,vv_step,vv_cfr,phv
   use mod_compact, only: kappa1,lam2max
@@ -367,7 +367,9 @@ contains
       if(nscal > 0) then
         call tic(tm_ssolve)
         if(melt) then
+          call tic(tm_melt)
           call melt_solve(s,q,dtb)
+          call toc(tm_melt)
         else
           call scalar_solve(s,nscal,dtb,1._rp)
         end if

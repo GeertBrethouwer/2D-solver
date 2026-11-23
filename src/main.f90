@@ -93,7 +93,7 @@ program solver2d
   !
   is_done = .false.
   t0 = MPI_WTIME()
-  call tic(tm_loop)
+  call timing_start
   do while(.not.is_done)
     call tic(tm_rk)
     call rk_step(time,dtcur)
@@ -134,11 +134,11 @@ program solver2d
       if(mod(istep,iout_field) == 0) call output_fields()
     end if
     call toc(tm_io)
+    call timing_step(istep,time,dtcur,is_done)
   end do
-  call toc(tm_loop)
   !$acc wait
   t1 = MPI_WTIME()
-  call timing_report(istep-istep0)
+  call timing_report(istep-istep0,real(nx,rp)*ny)
   tstep = (t1-t0)/max(istep-istep0,1)
   if(myid == 0) then
     write(*,'(a,es12.4,a)') ' wall-clock time per time step: ',tstep,' s'

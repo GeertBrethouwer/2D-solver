@@ -27,7 +27,7 @@ SRCDIR   := src
 BUILDDIR := build
 EXE      := $(BUILDDIR)/solver2d
 
-SRCS := types.f90 param.f90 compact.f90 decomp.f90 timer.f90 fft.f90 ysolve.f90 fields.f90 \
+SRCS := types.f90 param.f90 compact.f90 timer.f90 decomp.f90 fft.f90 ysolve.f90 fields.f90 \
         melt.f90 rk.f90 stats.f90 io.f90 initflow.f90 main.f90
 OBJS := $(addprefix $(BUILDDIR)/,$(SRCS:.f90=.o))
 
@@ -68,8 +68,8 @@ $(BUILDDIR)/%.o: $(SRCDIR)/%.f90 | $(BUILDDIR)
 # module dependencies
 $(BUILDDIR)/param.o:    $(BUILDDIR)/types.o
 $(BUILDDIR)/compact.o:  $(BUILDDIR)/param.o
-$(BUILDDIR)/decomp.o:   $(BUILDDIR)/param.o
-$(BUILDDIR)/timer.o:    $(BUILDDIR)/decomp.o
+$(BUILDDIR)/timer.o:    $(BUILDDIR)/param.o
+$(BUILDDIR)/decomp.o:   $(BUILDDIR)/param.o $(BUILDDIR)/timer.o
 $(BUILDDIR)/fft.o:      $(BUILDDIR)/decomp.o $(BUILDDIR)/timer.o
 $(BUILDDIR)/ysolve.o:   $(BUILDDIR)/decomp.o $(BUILDDIR)/compact.o
 $(BUILDDIR)/fields.o:   $(BUILDDIR)/decomp.o

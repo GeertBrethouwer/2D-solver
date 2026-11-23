@@ -64,7 +64,8 @@ module mod_param
   integer  :: iout_log = 10, iout_stats = 10, iout_save_stats = 1000, iout_restart = 5000, iout_field = 0
   real(rp) :: tstats_start = 0._rp
   integer  :: mode_log_kx = -1              ! log the energy of one Fourier mode (e.g. for TS waves)
-  logical  :: timing = .false.              ! timers, report at the end of the run
+  logical  :: timing = .false.              ! timers: report at the end, time per step in timing_steps.dat
+  logical  :: timing_sync = .true.          ! timers wait for the GPU (exact attribution, small overhead)
   !
   ! &scalars (two active scalars by default: e.g. temperature and salinity)
   !
@@ -133,7 +134,7 @@ contains
     namelist /time/ nstep,tmax,wall_time_max,dt,fixed_dt,dt_max,dt_growth,cfl,cfl_visc
     namelist /init/ init_type,init_amp,init_seed,mode_file,mode_kx,restart_file,reset_time
     namelist /output/ data_dir,iout_log,iout_stats,iout_save_stats,iout_restart,iout_field,tstats_start, &
-                      mode_log_kx,timing
+                      mode_log_kx,timing,timing_sync
     namelist /scalars/ nscal,pr,scal_theta,sbc_bot,sbc_top,sval_bot,sval_top,ssrc_const,ssrc_u,sinit,scal_form
     namelist /buoyancy/ gravity,ri
     namelist /melt_model/ melt,melt_t,melt_s,melt_st,melt_lambda,melt_thf,melt_sigma,melt_blowing,melt_xdiff, &

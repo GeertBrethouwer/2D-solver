@@ -13,6 +13,7 @@ module mod_decomp
   use mpi
   use mod_types
   use mod_param, only: nxh,ny,abort_run
+  use mod_timer, only: tic,toc,tm_a2a
 #if defined(_OPENACC)
   use openacc
 #endif
@@ -200,8 +201,10 @@ contains
     integer, intent(in) :: scnt(:),sdsp(:),rcnt(:),rdsp(:)
     integer :: ierr
     !$acc wait(1)
+    call tic(tm_a2a)
     !$acc host_data use_device(sb,rb)
     call MPI_ALLTOALLV(sb,scnt,sdsp,MPI_DOUBLE_COMPLEX,rb,rcnt,rdsp,MPI_DOUBLE_COMPLEX,MPI_COMM_WORLD,ierr)
     !$acc end host_data
+    call toc(tm_a2a)
   end subroutine alltoallv
 end module mod_decomp
