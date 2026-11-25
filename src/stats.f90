@@ -194,11 +194,11 @@ contains
     if(mode_log_kx >= 0) em = mode_energy(u,v,mode_log_kx)
     if(melt) call melt_means(mmean)
     if(myid == 0) then
-      write(iunit,'(i9,6es14.6,es11.3,2es14.6)',advance='no') istep,time,dtcur,ub,dpdx_app,tauw,retau,divm,ekin,em
+      write(iunit,'(i9,6es15.6e3,es12.3e3,2es15.6e3)',advance='no') istep,time,dtcur,ub,dpdx_app,tauw,retau,divm,ekin,em
       do n=1,nscal
-        write(iunit,'(2es14.6)',advance='no') buf(2+2*n-1),buf(2+2*n)
+        write(iunit,'(2es15.6e3)',advance='no') buf(2+2*n-1),buf(2+2*n)
       end do
-      if(melt) write(iunit,'(3es14.6,i9,es11.3)',advance='no') mmean(:),melt_nit,melt_res
+      if(melt) write(iunit,'(3es15.6e3,i9,es12.3e3)',advance='no') mmean(:),melt_nit,melt_res
       write(iunit,*)
       flush(iunit)
     end if

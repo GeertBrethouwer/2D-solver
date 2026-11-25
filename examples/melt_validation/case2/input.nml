@@ -1,0 +1,42 @@
+!======================================================================================================
+!  Melt validation, case 2 (report "Coupled diffusion of temperature and concentration in a semi-infinite
+!  domain with fixed and moving interfaces", Sec. 3.6, second simulation): no flow, receding ice interface.
+!    k = 1/1200, Le = 100, S = 1 (Stefan number L/(c dT)), Gamma = 0.1, T_inf = 1, C_inf = 1
+!  Theory: lambda = -0.35783455, C_w = 2.17e-7, T_w = -2.17e-8, melt speed -da/dt = -lambda sqrt(k/t)
+!  Mapping: kappa_T = 1/(re pr(1)) = k; pr(2) = Le; melt_st = 1/S; liquidus T = -Gamma C ->
+!  melt_lambda = -Gamma, melt_thf = 0, melt_sigma = 0. The interface is fixed at y = 0 and the meltwater
+!  velocity v = m* = -da/dt (melt_blowing) gives the interface-attached frame z' = z - a(t) of the report.
+!  The semi-infinite domain is approximated by ly = 1 with the far-field values at y = ly.
+!  Run:  mpirun -np 1 ../../../build/solver2d ;  then  python3 ../compare.py  (in ..)
+!======================================================================================================
+&grid
+  nx = 4, ny = 257                     ! 1D problem: x-independent
+  lx = 1.0, ly = 1.0
+  grid_type = 'auto', grid_alpha = 3.0 ! -> 'tanh_bot': refined at the ice (y = 0)
+/
+&physics
+  re = 1200., forcing = 'cpg', dpdx = 0.0   ! no flow along x
+  bc_bot = 'noslip', bc_top = 'freeslip'
+/
+&time
+  nstep = 10000000, tmax = 10.0
+  dt = 1.e-6, dt_growth = 1.05, dt_max = 1.e-3, cfl = 0.5
+/
+&init
+  init_type = 'laminar'
+/
+&output
+  iout_log = 1, iout_stats = 0, iout_save_stats = 0, iout_restart = 10000000, iout_field = 0
+/
+&scalars
+  nscal = 2
+  pr(1) = 1.0,  sbc_bot(1) = 'D', sval_bot(1) = 1.0, sbc_top(1) = 'D', sval_top(1) = 1.0, sinit(1) = 'one'
+  pr(2) = 100.0, sbc_bot(2) = 'D', sval_bot(2) = 1.0, sbc_top(2) = 'D', sval_top(2) = 1.0, sinit(2) = 'one'
+/
+&melt_model
+  melt = .true., melt_t = 1, melt_s = 2
+  melt_st = 1.0                        ! 1/S
+  melt_lambda = -0.1                   ! -Gamma
+  melt_thf = 0.0, melt_sigma = 0.0
+  melt_blowing = .true.
+/

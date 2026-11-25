@@ -174,6 +174,8 @@ configs/           arrhenius.mk, generic_gpu.mk
 examples/          input_reference.nml (every input item), ts_wave, rayleigh_benard (two active scalars),
                    rayleigh_benard_freeslip (free-slip bottom wall), ice_layer (template: water under
                    melting ice: three-equation condition at y = 0, free-slip at y = ly, gravity +y),
+                   melt_validation (case1, case2, compare.py: receding ice interface without flow against the
+                   similarity solution; reproduces the figures of the validation report),
                    salt_fingers (two scalars with opposite buoyancy), salt_fingers_gpu (production-size
                    template for one Arrhenius node), arrhenius_job.sh
 tools/             os_mode.py (Orr–Sommerfeld mode for init_type = 'mode'; needs numpy, scipy),
@@ -345,6 +347,7 @@ python3 tools/plot_field.py data 8000 s1 s2 v --scmap acton --cmap vik --srange 
 | Free-slip, nonlinear two-scalar case | bit-identical on 1 and 4 ranks; OpenACC host build agrees to 8e-14; ∂u/∂y at the free-slip wall converges to 0 with refinement (0.25, 0.019, 0.0017 for ny = 49, 97, 193, vs ~6.3 at the no-slip wall) |
 | Melting, steady Stefan problem (no salinity, St = 0.5, ice at y = 0, θ = 1 at y = 1) | m* = κ ln(1 + St) to 6e-9; temperature profile (e^{Vy/κ} − 1)/(e^{V/κ} − 1) to 3e-10; v = m* uniform |
 | Melting, steady three-equation problem (St = 0.5, Λ = −0.5, κ_T = 1, κ_S = 0.5) | m*, θ_b, s_b to 1.4e-8, 3.9e-8, 3.9e-8 (ny = 65) and 1.6e-9, 4.6e-9 (ny = 129), against the exact solution (exponential profiles, root of one equation); 1–2 coupling iterations per substep at steady state |
+| Melting, receding interface without flow (`examples/melt_validation`): similarity solution with a(t) = 2λ√(kt), case 1 (Le = 10, S = 10, Γ = 8) and case 2 (Le = 100, S = 1, Γ = 0.1), k = 1/1200, t = 0–10 | λ from the theory: −0.14848457 and −0.35783455. Case 1 at t = 10: C_w = 0.392540 vs 0.392248, T_w = −3.14032 vs −3.13798, melt speed to 1.1e-4. Case 2: melt speed to 8e-6, T profile to 5e-6, C front to 1.1e-3. The remaining error comes from the unresolved start (interface jump at t = 0): it decays like t^(−1/2) and halves when the grid is refined (case 1, ny = 513: C_w to 1.6e-4, melt speed to 5e-5) |
 | Melting, exact one-pass coupling (`melt_xdiff = 'explicit'`): the same steady tests | Stefan 5.7e-9; three-equation 1.4e-8 / 1.6e-9 (ny = 65 / 129), as with the iteration; no iterations; check of the wall gradients at round-off (1e-14) |
 | Melting, `'explicit'` vs `'implicit'`, convection under ice | identical to all printed digits; scalar solves 3.2× and time step 1.8× faster; `'explicit'` bit-identical on 1 and 3 ranks, restart (2 → 4 ranks) to 2e-14, OpenACC host build to 8e-14, `DEBUG=1` clean |
 | Melting, convection under ice (sea-water-like Λ, θ_f, St; Pr = 7, Sc = 50; 128 × 97) | stable, 3–4 coupling iterations per substep; Crank–Nicolson and θ = 1 agree; bit-identical on 1 and 3 ranks; restart (2 → 4 ranks) to 7e-14; OpenACC host build to 6e-14; `DEBUG=1` clean |

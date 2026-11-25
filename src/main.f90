@@ -76,13 +76,13 @@ program solver2d
   !
   if(myid == 0) then
     open(newunit=ilog,file=trim(data_dir)//'/log.dat',position='append')
-    write(ilog,'(a)',advance='no') '#    step          time            dt         ubulk  dpdx_applied'// &
-                                  '         tau_w        Re_tau     div_max          Ekin        E_mode'
+    write(ilog,'(a)',advance='no') '#    step           time             dt          ubulk   dpdx_applied'// &
+                                  '          tau_w         Re_tau      div_max           Ekin         E_mode'
     do n=1,nscal
-      write(ilog,'(a,i0,a,i0)',advance='no') '      dS',n,'dy_b      dS',n
+      write(ilog,'(a,i0,a,i0)',advance='no') '       dS',n,'dy_b       dS',n
       write(ilog,'(a)',advance='no') 'dy_t'
     end do
-    if(melt) write(ilog,'(a)',advance='no') '      m*_mean   theta_b_mean     s_b_mean  melt_it   melt_res'
+    if(melt) write(ilog,'(a)',advance='no') '        m*_mean   theta_b_mean       s_b_mean  melt_it    melt_res'
     write(ilog,*)
   end if
   divm = divergence_max(u,v,tmp1)
