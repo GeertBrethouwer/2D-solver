@@ -181,6 +181,7 @@ cd examples/mms && python3 convergence.py
   on the same grid). It prints the errors with the observed orders and writes `mms_convergence_*.png`. It
   takes about 30 s on one CPU core per variant. `--xdiff implicit` and `--grad explicit` test the other
   options.
+* **Derivation and results:** `docs/mms_melt.tex` (PDF next to it).
 * **Results:** third order in space for all fields and interface values, second order in time. The third
   order is set by the boundary closures of the compact scheme: a fifth-order wall gradient in the melt
   condition (`melt_grad = 'explicit'`) leaves the field errors unchanged.

@@ -23,6 +23,8 @@ ap.add_argument('--grad', default='compact', choices=['compact', 'explicit'],
                 help='melt_grad: wall gradient of the melt condition')
 ap.add_argument('--rundir', default='runs')
 ap.add_argument('--noplot', action='store_true')
+ap.add_argument('--fig', default=None, help='figure file (default mms_convergence_<xdiff>_<grad>.png; .pdf works)')
+ap.add_argument('--norun', action='store_true', help='only evaluate existing runs')
 a = ap.parse_args()
 exe = os.path.abspath(a.exe)
 base = open('input.nml').read()
@@ -48,7 +50,7 @@ def make(name, ny, dt, tend):
 runs = [make('space_ny%d' % ny, ny, DT_SPACE, T_SPACE) for ny in NY_SPACE] + \
        [make('time_dt%g' % dt, NY_TIME, dt, T_TIME) for dt in DT_TIME + [DT_REF]]
 procs = []
-for d in runs:                                   # run in parallel, at most --jobs at a time
+for d in ([] if a.norun else runs):                                   # run in parallel, at most --jobs at a time
     while len([p for p in procs if p.poll() is None]) >= a.jobs:
         procs[[p.poll() is None for p in procs].index(True)].wait()
     subprocess.run('rm -rf ' + os.path.join(d, 'data'), shell=True)
@@ -107,5 +109,6 @@ if not a.noplot:
     ax[1].set_title('time (ny = %d)' % NY_TIME)
     fig.suptitle('solver2d MMS with the melt condition (melt_xdiff = %s, melt_grad = %s)' % (a.xdiff, a.grad))
     fig.tight_layout()
-    fig.savefig('mms_convergence_%s.png' % tag, dpi=130)
-    print('\nwrote mms_convergence_%s.png' % tag)
+    fname = a.fig if a.fig else 'mms_convergence_%s.png' % tag
+    fig.savefig(fname, dpi=130)
+    print('\nwrote %s' % fname)
