@@ -7,3 +7,4 @@ mode.in
 *.mod
 *.png
 __pycache__/
+runs/

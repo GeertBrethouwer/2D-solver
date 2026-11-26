@@ -52,7 +52,7 @@ module mod_melt
   use mod_decomp , only: myid,nkx,nyA,yA_lo
   use mod_fft    , only: fwd_fft,bwd_fft
   use mod_ysolve , only: c1,ismean,mean_owner,i00,swb,vbw,scalar_solve
-  use mod_compact, only: nc1
+  use mod_compact, only: nc1,ew1
   implicit none
   private
   public :: init_melt,melt_solve,melt_means,melt_output,melt_nit,melt_res
@@ -64,6 +64,8 @@ module mod_melt
   complex(rp), allocatable :: wo(:,:)     ! (nkx,2) previous iterate of the wall values
   real(rp)   , allocatable :: resp(:,:,:) ! (nkx,2,3) wall response R_k of temperature and salinity per substep
   real(rp)   , allocatable :: hpr(:,:,:)  ! (ny,2,3) unit response profile h(y) (melt_xdiff = 'explicit')
+  real(rp)   , allocatable :: dwg(:)      ! wall-gradient functional d/dy|_0 = sum_r dwg(r) f(r), r = 1..ndwg:
+  integer :: ndwg                         ! first row of the compact D1, or 6-point one-sided (melt_grad)
   real(rp) :: rref(2,3) = 0._rp, c_cached(3) = -1._rp
   integer  :: melt_nit = 0                ! iterations in the last substep
   real(rp) :: melt_res = 0._rp            ! last change of the wall values
@@ -74,6 +76,14 @@ contains
     allocate(mh(nkx,ny,3),mp(mx,nyA,3),mr(nkx,ny,nsb),mt(nkx,ny,nsb),wo(nkx,2),resp(nkx,2,3),hpr(ny,2,3))
     mh = 0; mp = 0; mr = 0; mt = 0; wo = 0; resp = 0; hpr = 0
     !$acc enter data copyin(mh,mp,mr,mt,wo,resp,hpr)
+    allocate(dwg(ny))
+    dwg(:) = 0._rp
+    if(melt_grad == 'explicit') then
+      dwg(1:6) = ew1(:); ndwg = 6
+    else
+      dwg(:) = c1(:); ndwg = nc1
+    end if
+    !$acc enter data copyin(dwg)
   end subroutine init_melt
   !
   subroutine wall_response(q,dtb)
@@ -113,8 +123,8 @@ contains
       do j=1,2
         n = merge(it,max(is,1),j == 1)
         g = 0._rp
-        do r=1,nc1
-          g = g + c1(r)*real(mt(i,r,n),rp)
+        do r=1,ndwg
+          g = g + dwg(r)*real(mt(i,r,n),rp)
         end do
         resp(i,j,q) = g
         if(i == 1) then                                   ! h(y) (the same for all kx if x-diffusion is explicit)
@@ -218,14 +228,14 @@ contains
       !$acc parallel loop gang vector default(present) private(g1,g2) async(1)
       do i=1,nkx
         g1 = (0._rp,0._rp); g2 = (0._rp,0._rp)
-        do r=1,nc1
-          g1 = g1 + c1(r)*s(i,r,it)
+        do r=1,ndwg
+          g1 = g1 + dwg(r)*s(i,r,it)
         end do
         g1 = g1 - aT*swb(i,it)
         wo(i,1) = swb(i,it)
         if(salt) then
-          do r=1,nc1
-            g2 = g2 + c1(r)*s(i,r,is)
+          do r=1,ndwg
+            g2 = g2 + dwg(r)*s(i,r,is)
           end do
           g2 = g2 - aS*swb(i,is)
           if(ismean(i)) g2 = g2 - aS*sig
@@ -285,13 +295,13 @@ contains
     !$acc parallel loop gang vector default(present) private(g1,g2) async(1)
     do i=1,nkx
       g1 = (0._rp,0._rp); g2 = (0._rp,0._rp)
-      do r=1,nc1
-        g1 = g1 + c1(r)*s(i,r,it)
+      do r=1,ndwg
+        g1 = g1 + dwg(r)*s(i,r,it)
       end do
       wo(i,1) = g1                                        ! keep g0 for the check
       if(salt) then
-        do r=1,nc1
-          g2 = g2 + c1(r)*s(i,r,is)
+        do r=1,ndwg
+          g2 = g2 + dwg(r)*s(i,r,is)
         end do
         wo(i,2) = g2
         if(ismean(i)) g2 = g2 - aS*sig                    ! G of z = s + sigma
@@ -313,7 +323,7 @@ contains
       g1 = (0._rp,0._rp)
       do r=1,ny
         s(i,r,it) = s(i,r,it) + w1*hpr(r,1,q)
-        if(r <= nc1) g1 = g1 + c1(r)*s(i,r,it)
+        if(r <= ndwg) g1 = g1 + dwg(r)*s(i,r,it)
       end do
       dw = max(dw,abs(g1 - (wo(i,1) + aT*w1)))
       if(salt) then
@@ -322,7 +332,7 @@ contains
         g2 = (0._rp,0._rp)
         do r=1,ny
           s(i,r,is) = s(i,r,is) + w2*hpr(r,2,q)
-          if(r <= nc1) g2 = g2 + c1(r)*s(i,r,is)
+          if(r <= ndwg) g2 = g2 + dwg(r)*s(i,r,is)
         end do
         dw = max(dw,abs(g2 - (wo(i,2) + aS*w2)))
       end if

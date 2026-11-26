@@ -24,6 +24,7 @@ program solver2d
   use mod_initflow
   use mod_timer
   use mod_melt
+  use mod_mms
   implicit none
   integer :: ierr,istep,istep0,ilog,n,nf
   real(rp) :: time,dtcur,divm,t0,t1,tstep,twall0
@@ -72,6 +73,10 @@ program solver2d
     time = 0._rp; istep = 0; dtcur = dt
   end if
   istep0 = istep
+  if(mms) then
+    call init_mms
+    if(trim(init_type) /= 'restart') call mms_init_fields(u,v,s)   ! exact solution at t = 0
+  end if
   call vv_state_from_velocity(u,v)
   !
   if(myid == 0) then
@@ -87,6 +92,7 @@ program solver2d
   end if
   divm = divergence_max(u,v,tmp1)
   call log_line(ilog,istep,time,dtcur,divm,u,v,s,dpdx_applied)
+  if(mms) call mms_error(time,u,v,s)
   if(myid == 0) call log_line_stdout()
   !
   ! time integration
@@ -104,6 +110,7 @@ program solver2d
       call tic(tm_log)
       divm = divergence_max(u,v,tmp1)
       call log_line(ilog,istep,time,dtcur,divm,u,v,s,dpdx_applied)
+      if(mms) call mms_error(time,u,v,s)
       if(myid == 0) call log_line_stdout()
       if(divm /= divm .or. divm > 1.e3_rp) then
         if(myid == 0) write(*,'(a)') ' solver2d: the simulation diverged (NaN or huge divergence)'

@@ -93,6 +93,7 @@ module mod_param
   !   theta_b = Lambda s_b + theta_f,  m* = St kappa_T dtheta/dy,  kappa_S ds/dy = m* (s_b + sigma)
   ! m* = rho_i m/(rho_w U) is the melt rate as a water velocity; with melt_blowing, v(y=0) = m*
   !
+  logical  :: mms = .false.                 ! &mms_test: method of manufactured solutions (src/mms.f90)
   logical  :: melt = .false.
   integer  :: melt_t = 1                    ! scalar that is the temperature theta
   integer  :: melt_s = 2                    ! scalar that is the salinity s (0: no salinity -> Stefan condition)
@@ -105,6 +106,8 @@ module mod_param
                                             ! 'explicit' (RK3; the y-solve is then the same for all Fourier
                                             ! modes and the melt condition is imposed exactly without
                                             ! iteration) or 'implicit' (theta-method; iterative coupling)
+  character(len=8) :: melt_grad = 'compact' ! wall gradient in the melt condition: 'compact' (first row of the
+                                            ! compact D1) or 'explicit' (6-point one-sided, 5th order)
   integer  :: melt_maxit = 50               ! max. iterations of the implicit interface coupling per substep
   real(rp) :: melt_tol = 1.e-12_rp          ! convergence: max change of the interface values (theta, s units)
   !
@@ -142,7 +145,8 @@ contains
     namelist /scalars/ nscal,pr,scal_theta,sbc_bot,sbc_top,sval_bot,sval_top,ssrc_const,ssrc_u,sinit,scal_form
     namelist /buoyancy/ gravity,ri
     namelist /parallel/ comm_backend
-    namelist /melt_model/ melt,melt_t,melt_s,melt_st,melt_lambda,melt_thf,melt_sigma,melt_blowing,melt_xdiff, &
+    namelist /mms_test/ mms
+    namelist /melt_model/ melt,melt_t,melt_s,melt_st,melt_lambda,melt_thf,melt_sigma,melt_blowing,melt_xdiff,melt_grad, &
                           melt_maxit,melt_tol
     !
     open(newunit=iunit,file='input.nml',status='old',action='read',iostat=ios)
@@ -162,6 +166,8 @@ contains
     read(iunit,nml=buoyancy,iostat=ios); if(ios > 0 ) call abort_run('error reading namelist &buoyancy')
     rewind(iunit)
     read(iunit,nml=melt_model,iostat=ios); if(ios > 0 ) call abort_run('error reading namelist &melt_model')
+    rewind(iunit)
+    read(iunit,nml=mms_test,iostat=ios); if(ios > 0 ) call abort_run('error reading namelist &mms_test')
     rewind(iunit)
     read(iunit,nml=parallel,iostat=ios); if(ios > 0 ) call abort_run('error reading namelist &parallel')
     close(iunit)
@@ -199,6 +205,14 @@ contains
       if(any(sinit(1:nscal) /= 'linear' .and. sinit(1:nscal) /= 'zero' .and. sinit(1:nscal) /= 'one' .and. &
              sinit(1:nscal) /= 'noise')) call abort_run("sinit must be 'linear', 'zero', 'one' or 'noise'")
     end if
+    if(mms) then
+      if(nscal /= 2 .or. .not.melt .or. melt_t /= 1 .or. melt_s /= 2 .or. .not.melt_blowing) &
+        call abort_run('&mms_test: needs nscal = 2 and melt with melt_t = 1, melt_s = 2, melt_blowing')
+      if(bc_bot /= 'noslip' .or. bc_top /= 'freeslip') &
+        call abort_run("&mms_test: needs bc_bot = 'noslip', bc_top = 'freeslip'")
+      if(forcing /= 'cpg' .or. dpdx /= 0._rp) call abort_run("&mms_test: needs forcing = 'cpg', dpdx = 0")
+      if(sbc_top(1) /= 'D' .or. sbc_top(2) /= 'D') call abort_run("&mms_test: needs sbc_top = 'D' for both scalars")
+    end if
     if(melt) then
       if(freeslip_bot) call abort_run('&melt_model: the ice wall y = 0 must be no-slip (bc_bot)')
       if(melt_t < 1 .or. melt_t > nscal) call abort_run('&melt_model: melt_t must be a scalar index')
@@ -211,6 +225,8 @@ contains
       if(melt_st < 0._rp) call abort_run('&melt_model: melt_st must be >= 0')
       if(melt_lambda > 0._rp) call abort_run('&melt_model: melt_lambda must be <= 0')
       if(melt_maxit < 1 .or. melt_tol <= 0._rp) call abort_run('&melt_model: melt_maxit >= 1, melt_tol > 0')
+      if(all(melt_grad /= ['explicit','compact '])) &
+        call abort_run("&melt_model: melt_grad must be 'compact' or 'explicit'")
       if(all(melt_xdiff /= ['explicit','implicit'])) call abort_run("&melt_model: melt_xdiff must be 'explicit' or 'implicit'")
       if(melt_xdiff == 'explicit') then
         sxexp(melt_t) = .true.

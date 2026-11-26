@@ -102,6 +102,13 @@
   melt_xdiff = 'explicit'  ! x-diffusion of theta and s: 'explicit' (RK3; the melt condition is then imposed
                            ! exactly without iteration; time-step limit cfl_visc/(kappa kx_max^2)) or
                            ! 'implicit' (theta-method; iterative coupling, melt_maxit, melt_tol)
+  melt_grad = 'compact'    ! wall gradient in the melt condition: 'compact' (first row of the compact D1) or
+                           ! 'explicit' (6-point one-sided, 5th order; interface values 3-7x more accurate on
+                           ! coarse grids, the same on fine grids)
   melt_maxit = 50          ! 'implicit': max. iterations of the interface coupling per RK substep
   melt_tol = 1.e-12        ! 'implicit': convergence, max. change of the interface values
+/
+&mms_test                  ! method of manufactured solutions with the melt condition (examples/mms)
+  mms = .false.            ! .true.: start from the manufactured solution, add its source terms, and write
+                           ! the errors to data_dir/mms_error.dat (needs the set-up of examples/mms)
 /

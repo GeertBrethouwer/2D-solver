@@ -19,10 +19,12 @@ module mod_rk
                          vv_rhs_terms,vv_step,vv_cfr,phv
   use mod_compact, only: kappa1,lam2max
   use mod_melt   , only: melt_solve
+  use mod_mms    , only: mms_add_sources
   implicit none
   private
   public :: init_rk,rk_step,dpdx_applied
   real(rp) :: dpdx_applied = 0._rp
+  real(rp), parameter :: rk_cq(3) = [0._rp,8._rp/15._rp,2._rp/3._rp]   ! stage times t + c_q dt of the RK3
   real(rp), allocatable :: dyc_d(:)
 contains
   subroutine init_rk
@@ -132,10 +134,11 @@ contains
     end do
   end subroutine add_flux_div
   !
-  subroutine nonlinear(is_first,dtnew)
+  subroutine nonlinear(is_first,dtnew,tq)
     implicit none
     logical , intent(in)  :: is_first
     real(rp), intent(out) :: dtnew
+    real(rp), intent(in)  :: tq          ! time of the RK stage (manufactured-solution sources)
     integer :: n,i,k
     real(rp) :: qc,qu,fa
     logical  :: skew
@@ -216,6 +219,7 @@ contains
     !
     ! right-hand side h_v of the phi equation (in nv; mean column: N_x00)
     !
+    if(mms) call mms_add_sources(tq,nu,nv,ns)
     call vv_rhs_terms(nu,nv)
   end subroutine nonlinear
   !
@@ -328,7 +332,7 @@ contains
     real(rp) :: dtn,dtg,dtz,dtb,c,dpe,th
     do q=1,3
       call tic(tm_nl)
-      call nonlinear(q == 1,dtn)
+      call nonlinear(q == 1,dtn,time+rk_cq(q)*dtcur)
       call toc(tm_nl)
       if(q == 1) then
         if(fixed_dt) then

@@ -1,0 +1,41 @@
+!======================================================================================================
+!  Method of manufactured solutions (MMS) with the three-equation melt condition at y = 0.
+!  The manufactured solution (tools/mms/mms_solution.py -> src/mms_solution.f90) satisfies the melt
+!  condition (liquidus, heat and salt balances), u = 0 and v = m* at the ice (y = 0), and a free-slip wall
+!  with fixed scalar values at y = ly; source terms make it an exact solution. The code starts from the
+!  exact solution and writes the errors to data/mms_error.dat. Convergence study: python3 convergence.py
+!======================================================================================================
+&grid
+  nx = 16, ny = 65, lx = 2.0, ly = 1.0
+  grid_type = 'auto', grid_alpha = 2.0, fd_order = 6
+/
+&physics
+  re = 100., forcing = 'cpg', dpdx = 0.0
+  bc_bot = 'noslip', bc_top = 'freeslip', nl_form = 'rotational'
+/
+&time
+  nstep = 500, fixed_dt = .true., dt = 1.e-3
+/
+&init
+  init_type = 'laminar'                ! replaced by the exact solution at t = 0
+/
+&output
+  iout_log = 100, iout_stats = 0, iout_save_stats = 0, iout_restart = 0
+/
+&scalars
+  nscal = 2
+  pr(1) = 1.0, scal_theta(1) = 0.5, sbc_bot(1) = 'D', sbc_top(1) = 'D', sval_top(1) = 1.0
+  pr(2) = 2.0, scal_theta(2) = 0.5, sbc_bot(2) = 'D', sbc_top(2) = 'D', sval_top(2) = 1.0
+/
+&buoyancy
+  gravity = 0.3, 1.0
+  ri(1) = 0.1, ri(2) = -0.05
+/
+&melt_model
+  melt = .true., melt_t = 1, melt_s = 2
+  melt_st = 5.0, melt_lambda = -0.5, melt_thf = 0.2, melt_sigma = 0.3
+  melt_blowing = .true., melt_xdiff = 'explicit'
+/
+&mms_test
+  mms = .true.
+/
