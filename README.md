@@ -180,7 +180,9 @@ examples/          input_reference.nml (every input item), ts_wave, rayleigh_ben
                    template for one Arrhenius node), arrhenius_job.sh
 tools/             os_mode.py (Orr–Sommerfeld mode for init_type = 'mode'; needs numpy, scipy),
                    plot_field.py (plots the 2D field output, Scientific Colour Maps, colour ranges;
-                   needs numpy, matplotlib)
+                   needs numpy, matplotlib),
+                   restart_profiles.py (x-averaged profiles of T, S [and U] vs y from a restart file, as
+                   ASCII: python3 tools/restart_profiles.py data/restart -o profiles.dat; needs numpy)
 ```
 
 ## Building
