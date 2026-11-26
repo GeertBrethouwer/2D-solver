@@ -177,6 +177,8 @@ can be used to start a run (then restart with 0.5).
 cd examples/mms && python3 convergence.py
 ```
 
+  On Arrhenius: `cd examples/mms && sbatch arrhenius_mms.sh` (one GPU node, four runs at a time; tables
+  in `mms_convergence_gpu.txt`).
   This runs ny = 17 … 257 (Δt = 5·10⁻⁴) and Δt = 0.016 … 0.002 (ny = 65, against a run with Δt = 2.5·10⁻⁴
   on the same grid). It prints the errors with the observed orders and writes `mms_convergence_*.png`. It
   takes about 30 s on one CPU core per variant. `--xdiff implicit` and `--grad explicit` test the other
