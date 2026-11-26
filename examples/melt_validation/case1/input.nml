@@ -10,9 +10,12 @@
 !  Run:  mpirun -np 1 ../../../build/solver2d ;  then  python3 ../compare.py  (in ..)
 !======================================================================================================
 &grid
-  nx = 4, ny = 257                     ! 1D problem: x-independent
+  nx = 4, ny = 513                     ! 1D problem: x-independent
   lx = 1.0, ly = 1.0
-  grid_type = 'auto', grid_alpha = 3.0 ! -> 'tanh_bot': refined at the ice (y = 0)
+  grid_type = 'auto', grid_alpha = 6.0 ! -> 'tanh_bot': refined at the ice (y = 0), dy = 5.8e-5 there
+                                       ! (the error of C_w is proportional to dy at the ice: it is the
+                                       ! imprint of the unresolved start, when the boundary layers are
+                                       ! thinner than one cell; alpha_s = 3: dy = 5.9e-4, error 1.6e-4)
 /
 &physics
   re = 1200., forcing = 'cpg', dpdx = 0.0   ! no flow along x
