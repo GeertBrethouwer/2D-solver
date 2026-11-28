@@ -298,7 +298,9 @@ $\Delta t=0.008$ on its difference equals that of $v$, whose maximum lies at the
   \item \textbf{Couplings.} The exact one-pass coupling (\texttt{melt\_xdiff = 'explicit'}) and the
         iterative one (\texttt{'implicit'}) give nearly identical errors and the same orders.
   \item \textbf{Consistency.} The results are bit-identical on 1 and 3 MPI ranks, and the OpenACC code path
-        (host build) agrees to $1.5\times10^{-13}$.
+        (host build) agrees to $1.5\times10^{-13}$. On NSC Arrhenius (NVIDIA GH200, GPU build, one GPU per
+        run, \texttt{examples/mms/arrhenius\_mms.sh}) all errors and observed orders of both tables are
+        identical to the CPU results to all printed digits.
 \end{itemize}
 
 \end{document}
